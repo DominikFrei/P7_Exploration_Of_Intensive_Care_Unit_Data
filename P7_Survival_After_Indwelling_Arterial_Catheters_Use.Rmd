@@ -1,0 +1,42 @@
+---
+title: "P7_Survival_After_Indwelling_Arterial_Catheters_Use"
+author: "Dominik Frei"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Code
+
+## Set up
+
+Libraries:
+```{r}
+library(tidyverse)
+```
+
+Load in the data set:
+```{r}
+data <- read.csv(file = "Data/full_cohort_data.csv")
+```
+
+Display the data structure as imported:
+```{r}
+str(data)
+```
+
+Our main question is: Which of the available variables in the data set are useful
+for predicting death within 28 days, after the use of an indwelling arterial catheter (IAC)?
+
+Are there sufficient records for patients on wich an IAC was used?
+```{r}
+table(data$aline_flg)
+```
+
+Create a subset of this data
+
+Use vif to assess multicolinearity.
