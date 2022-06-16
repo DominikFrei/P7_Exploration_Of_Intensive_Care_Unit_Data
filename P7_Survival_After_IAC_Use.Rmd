@@ -1,0 +1,131 @@
+---
+title: "P7_Survival_After_Indwelling_Arterial_Catheters_Use"
+author: "Dominik Frei"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Code
+
+## Set up
+
+Libraries:
+```{r message=FALSE}
+library(tidyverse)
+library(Amelia) #missmap()
+library(mice) #imputation
+```
+Language:
+```{r}
+Sys.setenv(LANG = "en")
+```
+
+#* Load and Preprocess Data
+
+Load in the data set:
+```{r}
+data <- read.csv(file = "Data/full_cohort_data.csv",
+                 stringsAsFactors = TRUE)
+```
+
+Convert all the binary variables into factors:
+```{r define factors}
+for (i in 1:ncol(data)) {
+        if(length(unique(data[,i])) == 2) {
+                data[,i] <- as.factor(data[,i])
+        }
+}
+```
+
+
+Display the data structure as imported:
+```{r}
+str(data)
+```
+`gender_num` and `sepsis_flg` should also be factors:
+```{r}
+data$gender_num <- as.factor(data$gender_num)
+data$sepsis_flg <- as.factor(data$sepsis_flg)
+
+data[,c("gender_num", "sepsis_flg")] %>% str()
+```
+`sepsis_flg` will not be useful in our analysis, since all the values are the same
+(it has zero variance). We can therefore drop it from our data:
+```{r}
+data <- data %>% select(!sepsis_flg)
+```
+
+## Exploratory Data Analysis
+
+Lets look at the missing value sof the data:
+```{r missmap all, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+missmap(data[,colSums(is.na(data)) > 0], main = "Missingness Map: All Patients")
+```
+The `bmi` variable contains around 400 NA values, which have adjacent indexes.
+This is somewhat odd. It does not seem that the data was ordered for missing values
+in `bmi`, since there are other NAs, outside of the missing chunk.
+
+Is there anything special about these missing records?
+
+The variable `weight_first` might be somehow related to bmi. Lets plot it versus the rowindex:
+```{r fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+data %>% ggplot(aes(x = row_number(weight_first), y = weight_first)) +
+        geom_point()
+```
+
+
+The main question we will pose is: Which of the available variables in the data set are useful
+for predicting death within 28 days, after the use of an indwelling arterial catheter (IAC)?
+
+It is important to note that these risk factors will likely not be very specific
+for the use of AIC but might be just general risk factors.
+
+Are there sufficient records for patients on which an IAC was used?
+```{r}
+table(data$aline_flg)
+```
+
+Subset the data and drop the `aline_flg` variable:
+```{r}
+data_sub <- data %>% filter(aline_flg == 1) %>% 
+        select(!aline_flg)
+```
+
+Lets look at missing values.
+Produce a missingnes plot for all the columns where there are missing values:
+```{r missmap AIC, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+missmap(data_sub[,colSums(is.na(data_sub)) > 0], main = "Missingness Map: Patients with AIC")
+```
+
+
+
+We will try to impute the missing values by using the mice::mice function.
+
+It might be useful to have more data to do this, so we will do the imputation on
+the whole data set.
+Lets first look at a missingnes map of the whole dataset.
+
+```{r missmap all, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+missmap(data[,colSums(is.na(data)) > 0], main = "Missingness Map: All Patients")
+```
+
+Fo the complete dataset, there is overall a bit more data missing and some variables
+contain relatively more missing values. The overall patern (a chunk of missing values
+for `bmi`) however, is the same.
+
+Perform imputation only for subet data:
+```{r message=FALSE, cache=TRUE}
+#data_imp <- mice(data_sub)
+```
+
+```{r}
+#plot(data_imp)
+```
+
+
+- Use vif to assess multicolinearity.
