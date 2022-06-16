@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRUE)
 ```
 
 
@@ -25,7 +25,7 @@ Language:
 Sys.setenv(LANG = "en")
 ```
 
-#* Load and Preprocess Data
+## Load and Preprocess Data
 
 Load in the data set:
 ```{r}
@@ -63,7 +63,7 @@ data <- data %>% select(!sepsis_flg)
 ## Exploratory Data Analysis
 
 Lets look at the missing value sof the data:
-```{r missmap all, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+```{r missmap all}
 missmap(data[,colSums(is.na(data)) > 0], main = "Missingness Map: All Patients")
 ```
 The `bmi` variable contains around 400 NA values, which have adjacent indexes.
@@ -73,11 +73,91 @@ in `bmi`, since there are other NAs, outside of the missing chunk.
 Is there anything special about these missing records?
 
 The variable `weight_first` might be somehow related to bmi. Lets plot it versus the rowindex:
-```{r fig.width=10, fig.height=8, fig.fullwidth=TRUE}
-data %>% ggplot(aes(x = row_number(weight_first), y = weight_first)) +
-        geom_point()
+```{r}
+data %>% ggplot(aes(x = as.numeric(rownames(.)), y = weight_first)) +
+        geom_point() +
+        theme_classic()
+```
+There doesnt seem to be a particular order to the weights in the dataframe.
+
+Lets also include `bmi` in the plot:
+```{r}
+data %>% ggplot(aes(x = as.numeric(rownames(.)))) +
+        geom_point(aes(y = weight_first)) +
+        geom_point(aes(y = bmi, col = "red")) +
+        theme_classic()
+```
+Here we see that the missing chunk for the is at the end of the data frame.
+It starts at the row number 1387.
+
+Does this coincide with any patterns in other variables?
+
+Lets calculate means for all the numeric variables, for the part of the data, where
+the `bmi` values are missing and the rest and then compare them:
+```{r}
+mean_missing <- data %>% select_if(is.numeric) %>% 
+        filter(as.numeric(rownames(.)) >= 1387) %>% 
+        summarise(colname = colnames(.), mean = colMeans(., na.rm = TRUE)) %>% 
+        mutate(in_chunk = TRUE)
+        
+
+mean_missing <- data %>% select_if(is.numeric) %>% 
+        filter(as.numeric(rownames(.)) < 1387) %>% 
+        summarise(colname = colnames(.), mean = colMeans(., na.rm = TRUE)) %>% 
+        mutate(in_chunk = FALSE) %>% 
+        rbind(mean_missing)
+        
+mean_missing %>% ggplot(aes(x = colname, y = mean, fill = as.factor(in_chunk))) +
+        geom_bar(stat = "identity", position = "dodge") +
+        theme_classic() +
+        coord_flip()
+```
+There arent any big differences in the means between the part of the dataframe, where `bmi`
+is missing and the rest.
+
+Lets look at the factor variables:
+```{r}
+mean_missing_f <- data %>% select_if(is.factor) %>% 
+        sapply(.,as.numeric) %>% 
+        as.data.frame() %>% 
+        filter(as.numeric(rownames(.)) >= 1387) %>% 
+        summarise(colname = colnames(.), mean = colMeans(., na.rm = TRUE)) %>% 
+        mutate(in_chunk = TRUE)
+
+mean_missing_f <- data %>% select_if(is.factor) %>% 
+        sapply(.,as.numeric) %>% 
+        as.data.frame() %>%
+        filter(as.numeric(rownames(.)) < 1387) %>% 
+        summarise(colname = colnames(.), mean = colMeans(., na.rm = TRUE)) %>% 
+        mutate(in_chunk = FALSE) %>% 
+        rbind(mean_missing_f)
+
+mean_missing_f %>% ggplot(aes(x = colname, y = mean, fill = as.factor(in_chunk))) +
+        geom_bar(stat = "identity", position = "dodge") +
+        theme_classic() +
+        coord_flip()
+```
+Here we just converted the factor levels into numeric values and then took the means.
+This is only a quick solution. For factors with mor ethen two levels, this doesnt 
+necessarily show the differences perfectly.
+
+It  seems here as well there are no obvious patterns in the other variables.
+
+The reason why exactly these values are missing remains unclear.
+
+Is there any correlation between `weight_first` and `bmi`?
+```{r}
+data %>% ggplot(aes(x = weight_first, y = bmi)) +
+        geom_point() +
+        theme_classic()
 ```
 
+
+```{r}
+cor.test(data$bmi, data$weight_first)
+```
+
+-------
 
 The main question we will pose is: Which of the available variables in the data set are useful
 for predicting death within 28 days, after the use of an indwelling arterial catheter (IAC)?
@@ -98,7 +178,7 @@ data_sub <- data %>% filter(aline_flg == 1) %>%
 
 Lets look at missing values.
 Produce a missingnes plot for all the columns where there are missing values:
-```{r missmap AIC, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
+```{r}
 missmap(data_sub[,colSums(is.na(data_sub)) > 0], main = "Missingness Map: Patients with AIC")
 ```
 
@@ -110,9 +190,6 @@ It might be useful to have more data to do this, so we will do the imputation on
 the whole data set.
 Lets first look at a missingnes map of the whole dataset.
 
-```{r missmap all, fig.width=10, fig.height=8, fig.fullwidth=TRUE}
-missmap(data[,colSums(is.na(data)) > 0], main = "Missingness Map: All Patients")
-```
 
 Fo the complete dataset, there is overall a bit more data missing and some variables
 contain relatively more missing values. The overall patern (a chunk of missing values
