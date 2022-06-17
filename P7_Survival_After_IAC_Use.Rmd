@@ -9,6 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRUE)
 ```
 
+## Resources
+
+Data Source: https://physionet.org/content/mimic2-iaccd/1.0/
+
 
 # Code
 
@@ -17,8 +21,11 @@ knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRU
 Libraries:
 ```{r message=FALSE}
 library(tidyverse)
+library(knitr)
+library(caret)
 library(Amelia) #missmap()
 library(mice) #imputation
+library(Hmisc) #rcorr()
 ```
 Language:
 ```{r}
@@ -61,6 +68,8 @@ data <- data %>% select(!sepsis_flg)
 ```
 
 ## Exploratory Data Analysis
+
+### Missing Values
 
 Lets look at the missing value sof the data:
 ```{r missmap all}
@@ -138,10 +147,43 @@ mean_missing_f %>% ggplot(aes(x = colname, y = mean, fill = as.factor(in_chunk))
         coord_flip()
 ```
 Here we just converted the factor levels into numeric values and then took the means.
-This is only a quick solution. For factors with mor ethen two levels, this doesnt 
+This is only a quick solution. For factors with more than two levels, this doesnt 
 necessarily show the differences perfectly.
 
 It  seems here as well there are no obvious patterns in the other variables.
+
+Now we will produce a dummy variable that indicates the records, where the `bmi`
+value is missing and then calculate the pearson correlation of this with all
+other variables:
+```{r}
+#produce missingness indicator variable
+data_mis_ind <- data %>% mutate(bmi_missing = as.numeric(is.na(data$bmi)))
+
+#select all the numeric variables
+data_mis_ind_n <- data_mis_ind %>% select_if(is.numeric)
+
+#transform all the factors to numeric
+data_mis_ind <- data_mis_ind %>% select_if(is.factor) %>% 
+        sapply(.,as.numeric) %>% 
+        as.data.frame() %>%
+        cbind(., data_mis_ind_n)
+
+#perform cor tests and save results
+mis_cor_results <- data.frame(matrix(nrow = 0, ncol = 3))
+
+for (i in 1:(ncol(data_mis_ind)-1)) {
+        test <- cor.test(data_mis_ind$bmi_missing, data_mis_ind[,i], method = "pearson")
+        res <- cbind(colnames(data_mis_ind)[i], test$estimate[[1]], test$p.value)
+        mis_cor_results <- rbind(mis_cor_results, res)
+}
+
+#rename columns
+colnames(mis_cor_results) <- c("var_name", "cor", "p_val")
+
+#order for p value and present
+mis_cor_results %>% arrange(p_val) %>% filter(p_val < 0.05) %>% kable()
+```
+There arent any strong correlations.
 
 The reason why exactly these values are missing remains unclear.
 
@@ -152,9 +194,145 @@ data %>% ggplot(aes(x = weight_first, y = bmi)) +
         theme_classic()
 ```
 
-
 ```{r}
 cor.test(data$bmi, data$weight_first)
+```
+There is significant correlation between `weight_first` and `bmi` (which is not
+surprising, since bmi is calculated using weight and height). The remaining variation
+in the `bmi` is due to variances in height of the people. Unfortunately we dont know height.
+Nevertheless, `weight_first` would be useful if we want to impute the missing values of`bmi`.
+
+Lets look at the rest of the missing values. In the missingness plot, above there does not 
+seem to be too much of a pattern. There are some patients with several missing values.
+The reason for this is probably that these variables are normally captured/recorded together
+(e.g. blood co2 and oxygen levels or anamnesis => all the `_flg` variables) and where not
+captured/recorded for certain patients.
+
+Show counts of missing values:
+```{r}
+sapply(data, function(x) sum(is.na(x))) %>% 
+        .[which(. > 0)] %>% 
+        sort(decreasing = TRUE) %>% 
+        data.frame()
+```
+We will later impute the missing values.
+
+### Variance?
+
+Lets look at the variablility in certain variables. Especially for the "flag variables"
+I suspect there could be very low values, which can lead to problems (near zero variance).
+
+Calculate the percentage in the data that have a positive (1) value for the flag
+variables:
+```{r}
+data %>% select(ends_with("_flg")) %>% 
+        sapply(function(x) as.numeric(x)-1) %>% 
+        data.frame() %>% 
+        colMeans() %>% 
+        sort() %>% 
+        data.frame() %>% 
+        mutate(perc_flagged = .*100) %>% 
+        select(!.) %>% 
+        kable(digits = 2)
+```
+Some of the variables really do have a low variance e.g. `renal_flg` only contains 
+ca. 3 percent of positive values.
+
+We can use the caret::nearZeroVar function to identify near zero variables in
+all of the data:
+```{r}
+nearZeroVar(data, saveMetrics = TRUE) %>% filter(zeroVar == TRUE | nzv == TRUE)
+```
+Here renal_flg is found to be the only near zero variable in the data set 
+(we had already removed `sepsis_flg` earlier, which had zero variance).
+
+### Variables with Information about Death
+
+Some of the flag variables above are actually not flags for for medical conditions,
+but contain information about death of patients or if an IAC was used on them:
+- `censor_flg`: censored or death (binary: 0 = death, 1 = censored)  
+- `day_28_flg`: death within 28 days (binary: 1 = yes, 0 = no)  
+- `hosp_exp_flg`: death in hospital (binary: 1 = yes, 0 = no)
+- `icu_exp_flg`: death in ICU (binary: 1 = yes, 0 = no)  
+- `aline_flg`: IAC used (binary, 1 = year, 0 = no)
+
+Lets plot a correlation matrix:
+```{r}
+#subset for these variables
+data_death <- data %>% select(censor_flg, day_28_flg, hosp_exp_flg, icu_exp_flg, aline_flg)
+#correlation matrix
+rcorr(as.matrix(data_death))
+```
+
+`aline_flg` correlates significantly with `hosp_exp_flg` and `icu_exp_flg` and close
+to significantly with `day_28_flg`. The correlation coefficients however are quite small
+for all of them. This indicates that either the use of an AIC increases the risk for
+death or patients with a higher risk of death are more likely to receive monitoring via IAC.
+
+What exactly is the relation between 
+
+Lets look at contingency tables between `day_28_flg` and `hosp_exp_flg` / `icu_exp_flg`?
+Can `hosp_exp_flg` / `icu_exp_flg` only be positive if `day_28_flg` is positive?
+
+Produce contingency tables:
+```{r}
+table(data$day_28_flg, data$hosp_exp_flg, dnn = c("day_28_flg", "hosp_exp_flg"))
+
+table(data$day_28_flg, data$icu_exp_flg, dnn = c("day_28_flg", "icu_exp_flg"))
+```
+No, there are three patients that died in the hospital, but not within 28 days.
+
+However from the correlations of `day_28_flg` with `hosp_exp_flg` / `icu_exp_flg`
+we see that many of them died in the ICU or in the hospital
+
+Lets look at the contingency table of `day_28_flg` with `censor_flg`:
+```{r}
+table(data$day_28_flg, data$censor_flg, dnn = c("day_28_flg", "censor_flg"))
+```
+We see that there are no discrepancies between the variables (dead within 28 days but not
+registered as dead in `censor_flg`)
+
+### Physiological Measurements
+
+Lets look at all the variables that contain physiological measurements or similar 
+(ending in _1st or _first):
+```{r}
+#subset
+data_meas <- data %>% select(ends_with("_1st") | ends_with("_first"))
+
+#scale
+data_meas <- data_meas %>% sapply(., scale) %>% data.frame()
+```
+
+Produce boxplots to see the general distribution of the data (outliers are not shown)
+```{r fig.height=5}
+boxplot(data_meas[,1:6], outline= FALSE)
+```
+`spo2_1st` is left skewed. The variable measures Saturation of Peripheral Oxygen
+in percent, which normally is between 95% – 99%. So the distribution here makes sense.
+
+The other distributions are more or less symmetric.
+```{r fig.height=5}
+boxplot(data_meas[,7:12], outline= FALSE)
+```
+All are more or less symmetric.
+```{r fig.height=5}
+boxplot(data_meas[,13:18], outline= FALSE)
+```
+`bun_first` and `po2_first` are a bit right skewed.
+- `bun_first`: first Blood urea nitrogen (mg/dL, numeric): higher values could indicate
+ decrease in glomerular filtration rate, which in turn is suggestive of kidney failure.
+- `po2_first`: Partial Pressure of Oxygen in blood (mmHg, numeric): high values dont
+have a specific medical implication.
+
+We would expect a certain correlation with `renal_flg`. Lets check this:
+```{r}
+cor.test(data$bun_first, as.numeric(data$renal_flg))
+```
+There is a statistically significant correlation between the two
+
+```{r}
+data %>% str()
 ```
 
 -------
