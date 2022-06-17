@@ -254,12 +254,14 @@ but contain information about death of patients or if an IAC was used on them:
 - `day_28_flg`: death within 28 days (binary: 1 = yes, 0 = no)  
 - `hosp_exp_flg`: death in hospital (binary: 1 = yes, 0 = no)
 - `icu_exp_flg`: death in ICU (binary: 1 = yes, 0 = no)  
-- `aline_flg`: IAC used (binary, 1 = year, 0 = no)
+- `aline_flg`: IAC used (binary, 1 = year, 0 = no) 
+- `mort_day_censored`: day post ICU admission of censoring or death (days, numeric)
+# explore var further
 
 Lets plot a correlation matrix:
 ```{r}
 #subset for these variables
-data_death <- data %>% select(censor_flg, day_28_flg, hosp_exp_flg, icu_exp_flg, aline_flg)
+data_death <- data %>% select(censor_flg, day_28_flg, hosp_exp_flg, icu_exp_flg, mort_day_censored, aline_flg)
 #correlation matrix
 rcorr(as.matrix(data_death))
 ```
@@ -302,22 +304,84 @@ data_meas <- data %>% select(ends_with("_1st") | ends_with("_first"))
 
 #scale
 data_meas <- data_meas %>% sapply(., scale) %>% data.frame()
+
+#pivot longer and create indicators for outliers
+data_meas <- data_meas %>% pivot_longer(cols = colnames(.)) %>% 
+        group_by(name) %>% 
+        mutate(outlier = as.factor(ifelse((value>3*IQR(value, na.rm = TRUE) | value <(-3*IQR(value, na.rm = TRUE))), 1, 0)))
 ```
 
-Produce boxplots to see the general distribution of the data (outliers are not shown)
+Produce density plots to present the distribution of the data (outliers (>3*IQR) are marked
+by red ticks)
 ```{r fig.height=5}
-boxplot(data_meas[,1:6], outline= FALSE)
+data_meas %>% filter(name %in% unique(.$name)[1:6]) %>% 
+        ggplot(aes(x = value)) +
+        facet_wrap(~ name) +
+        geom_density() +
+        geom_rug(data = ~ filter(.x, outlier == 1), col = "red") +
+        coord_cartesian(ylim = c(0, 1)) +
+        theme_bw()
 ```
-`spo2_1st` is left skewed. The variable measures Saturation of Peripheral Oxygen
-in percent, which normally is between 95% – 99%. So the distribution here makes sense.
+- `spo2_1st` is left skewed. The variable measures Saturation of Peripheral Oxygen
+in percent, which normally is between 95% – 99%. So the distribution here makes sense. 
+
+Lets look at the lowest values:
+```{r}
+data %>% arrange(spo2_1st) %>% select(spo2_1st) %>% .[1:20,]
+```
+There are some very low values. Lets look at the records with values below 50:
+```{r}
+data %>% filter(spo2_1st < 50) %>%  select(spo2_1st, po2_first, icu_los_day, hospital_los_day, sapsi_first, sofa_first, service_num,
+                                           hosp_exp_flg, icu_exp_flg, day_28_flg, mort_day_censored) %>% kable()
+```
+We can see that 4 of the 6 patients survived.
+
+The po2 scores are not especially low, only one value is below 80 mmHg.
+
+The SAPS I scores are not that high (all < 29). For the SAPS II score, this would
+indicate a mortality rate of < 10 %
+according to (https://clincalc.com/IcuMortality/SAPSII.aspx).
+I did not find anything about SAPS I in a quick search.
+It has to be noted, that SPO2 is not used in the calculation of SAPS II
+
+For the SOFA score the maximal value is 24, so the values are not that critical either.
+
+# weiter
+
+
+
+- There are some high values for `weight_first`, which is plausible (obese patients).  
+- There is an extremely low value for `temp_1st`. lets have a look at it:
+```{r}
+data$temp_1st %>% min(., na.rm = TRUE)
+```
+Temperature is coded in Fahrenheit. In Celsius it is:
+```{r}
+(32-32)/1.8
+```
+This is clearly impossible, therefore we will replace this value with NA and will impute it later
+together with the other data:
+```{r}
+data[data$temp_1st == 32 & is.na(data$temp_1st) == FALSE, "temp_1st"] <- NA
+```
 
 The other distributions are more or less symmetric.
 ```{r fig.height=5}
-boxplot(data_meas[,7:12], outline= FALSE)
+data_meas %>% filter(name %in% unique(.$name)[7:12]) %>% 
+        ggplot(aes(x = value)) +
+        facet_wrap(~ name) +
+        geom_density() +
+        geom_rug(data = ~ filter(.x, outlier == 1), col = "red") +
+        theme_bw()
 ```
 All are more or less symmetric.
 ```{r fig.height=5}
-boxplot(data_meas[,13:18], outline= FALSE)
+data_meas %>% filter(name %in% unique(.$name)[13:18]) %>% 
+        ggplot(aes(x = value)) +
+        facet_wrap(~ name) +
+        geom_density() +
+        geom_rug(data = ~ filter(.x, outlier == 1), col = "red") +
+        theme_bw()
 ```
 `bun_first` and `po2_first` are a bit right skewed.
 - `bun_first`: first Blood urea nitrogen (mg/dL, numeric): higher values could indicate
