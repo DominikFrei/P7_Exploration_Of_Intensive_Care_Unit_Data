@@ -217,7 +217,7 @@ sapply(data, function(x) sum(is.na(x))) %>%
 ```
 We will later impute the missing values.
 
-### Variance?
+### Variance
 
 Lets look at the variablility in certain variables. Especially for the "flag variables"
 I suspect there could be very low values, which can lead to problems (near zero variance).
@@ -254,9 +254,7 @@ but contain information about death of patients or if an IAC was used on them:
 - `day_28_flg`: death within 28 days (binary: 1 = yes, 0 = no)  
 - `hosp_exp_flg`: death in hospital (binary: 1 = yes, 0 = no)
 - `icu_exp_flg`: death in ICU (binary: 1 = yes, 0 = no)  
-- `aline_flg`: IAC used (binary, 1 = year, 0 = no) 
-- `mort_day_censored`: day post ICU admission of censoring or death (days, numeric)
-# explore var further
+- `aline_flg`: IAC used (binary, 1 = yes, 0 = no) 
 
 Lets plot a correlation matrix:
 ```{r}
@@ -293,6 +291,43 @@ table(data$day_28_flg, data$censor_flg, dnn = c("day_28_flg", "censor_flg"))
 ```
 We see that there are no discrepancies between the variables (dead within 28 days but not
 registered as dead in `censor_flg`)
+
+Other then the flag variables discussed above there is also some information about
+how many days after ICU admission the person died or was censored (`mort_day_censored`).
+Create plot of the distributions over time for dead and censored patients:
+```{r}
+data %>% ggplot(aes(x = mort_day_censored, fill = censor_flg, alpha = 0.5))+
+        geom_density()+
+        theme_classic()+
+        geom_vline(xintercept = 120, col = "green") +
+        scale_x_continuous(breaks=c(seq(from = 0, to = 3000, by=250)))
+```
+We can see on the plot above, that deaths where registered up until ca. 750 days
+after ICU admission, with most of them happening within maybe up until 120 days
+(here marked by the green vertical line)
+and that starting at around 500 days after ICU admission censoring starts.
+
+Lets plot the distribution above for only patients that had IAC:
+```{r}
+data %>% filter(aline_flg == 1) %>% 
+        ggplot(aes(x = mort_day_censored, fill = censor_flg, alpha = 0.5))+
+        geom_density()+
+        geom_vline(xintercept = 28, col = "red") +
+        geom_vline(xintercept = 120, col = "green") +
+        theme_classic()+
+        scale_x_continuous(breaks=c(seq(from = 0, to = 3000, by=250)))
+```
+We can see that most deaths happened up until maybe 120 days after ICU admission
+(here marked with the green line). There is another small peak between 500 and 700
+days. Censoring also starts at around 500 days. Over all the distributions are quite similar
+to the ones in the plot above.  
+The red vertical line in the plot marks the cut of for the inclusion in the `day_28_flg`
+variable. This was used as main outcome in the analysis performed in the book.
+To my understanding this cut of is more or less arbitrary and was set / or chosen
+as to be in close proximity to ICU admission. I assume this was done, to due to the assumption
+that if use of an IAC would increase mortality it would most likely be short term mortality
+(due to more infections or similar).  
+Since we have the necessary data we could create flags with other cut offs.
 
 ### Physiological Measurements
 
@@ -331,24 +366,37 @@ data %>% arrange(spo2_1st) %>% select(spo2_1st) %>% .[1:20,]
 ```
 There are some very low values. Lets look at the records with values below 50:
 ```{r}
-data %>% filter(spo2_1st < 50) %>%  select(spo2_1st, po2_first, icu_los_day, hospital_los_day, sapsi_first, sofa_first, service_num,
-                                           hosp_exp_flg, icu_exp_flg, day_28_flg, mort_day_censored) %>% kable()
+data %>% filter(spo2_1st < 50) %>%  select(spo2_1st, po2_first, icu_los_day, 
+                                           hospital_los_day, sapsi_first, sofa_first, 
+                                           service_num, hosp_exp_flg, icu_exp_flg, 
+                                           day_28_flg, mort_day_censored, copd_flg,
+                                           resp_flg) %>% kable()
 ```
 We can see that 4 of the 6 patients survived.
 
+Three of the patients had respiratory diseases (non COPD).
+
 The po2 scores are not especially low, only one value is below 80 mmHg.
+I found some literature (https://journals.lww.com/ccmjournal/Abstract/2012/12001/414__CORRELATION_OF_PULSE_OXIMETRY_AND_ARTERIAL.379.aspx) that states that the two values where found to be correlated in 
+most cases (94%) for values of pO2 >60 mmHg.  
+However it is also quite possible that
+the spo2 levels where measured first (as it can be measured non invasively and quickly) 
+and the po2 values where measured only after 
+some measures where taken (ventilation with oxygen). This could also explain
+the relatively high po2 levels in most patients.
 
 The SAPS I scores are not that high (all < 29). For the SAPS II score, this would
 indicate a mortality rate of < 10 %
 according to (https://clincalc.com/IcuMortality/SAPSII.aspx).
 I did not find anything about SAPS I in a quick search.
-It has to be noted, that SPO2 is not used in the calculation of SAPS II
+It has to be noted, that SPO2 is not used in the calculation of SAPS II.
 
 For the SOFA score the maximal value is 24, so the values are not that critical either.
+SPO2 is not used in the calculation of the SOFA score either.
 
-# weiter
-
-
+It is unclear to me if these measurements where wrong or not. We could
+possibly replace them with NAs and impute them later. I think it also depends on the weight
+these outliers would get in a model
 
 - There are some high values for `weight_first`, which is plausible (obese patients).  
 - There is an extremely low value for `temp_1st`. lets have a look at it:
@@ -375,6 +423,19 @@ data_meas %>% filter(name %in% unique(.$name)[7:12]) %>%
         theme_bw()
 ```
 All are more or less symmetric.
+For these lab values, especially high or low values can be indicative of underlying
+diseases.
+
+Lets look at the outliers of `wbc_first` (first White blood cell count (K/uL, numeric)),
+as they are the most extreme:
+```{r}
+data$wbc_first %>% sort(decreasing = TRUE) %>% head(n = 3)
+```
+Norm values are from 4.5 - 11.0 K/uL. So these values are clearly quite out of the normal range.
+This can be indicative of infections or malignancies.
+
+We will not look more closely at the other values.
+
 ```{r fig.height=5}
 data_meas %>% filter(name %in% unique(.$name)[13:18]) %>% 
         ggplot(aes(x = value)) +
@@ -383,17 +444,179 @@ data_meas %>% filter(name %in% unique(.$name)[13:18]) %>%
         geom_rug(data = ~ filter(.x, outlier == 1), col = "red") +
         theme_bw()
 ```
-`bun_first` and `po2_first` are a bit right skewed.
+The distribution for `po2_first` is not very symetric.
+- `po2_first`: Partial Pressure of Oxygen in blood (mmHg, numeric): high values dont
+have a specific medical implication. They could also be explained by ventilation 
+with oxygen before the measurement.  
+
+There are lots of outliers for `pco2_first`, `bun_first` and `creatinine_first`.
+- `pco2_first`: first PaCO_2 (mmHg, numeric). High values can be the result of hypoventilation
+which could make sense in the context of ICU admission.
+
 - `bun_first`: first Blood urea nitrogen (mg/dL, numeric): higher values could indicate
  decrease in glomerular filtration rate, which in turn is suggestive of kidney failure.
-- `po2_first`: Partial Pressure of Oxygen in blood (mmHg, numeric): high values dont
-have a specific medical implication.
+- The same goes for `creatinine_first`: first Creatinine (mg/dL, numeric)
 
-We would expect a certain correlation with `renal_flg`. Lets check this:
+We would expect a certain correlation of `bun_first` with `renal_flg`. Lets check this:
 ```{r}
 cor.test(data$bun_first, as.numeric(data$renal_flg))
 ```
-There is a statistically significant correlation between the two
+There is a statistically significant correlation between the two.
+
+## Other Variables
+
+There is some information about how long the patients stayed in ICU / hospital:  
+- `icu_los_day`: length of stay in ICU (days, numeric)  
+- `hospital_los_day`: length of stay in hospital (days, numeric)  
+
+Lets plot length of stay in ICU for dead and censored patients:
+```{r fig.height=5}
+data %>% ggplot(aes(x = icu_los_day, fill = censor_flg, alpha = 0.5))+
+        geom_density()+
+        theme_classic()
+```
+The patients that died had generally a bit longer ICU stays and most patients 
+that stayed longer then 20 days died.
+
+Lets plot length of stay in the ICU for patients with and without IAC:
+```{r fig.height=5}
+data %>% ggplot(aes(x = icu_los_day, fill = aline_flg, alpha = 0.5))+
+        geom_density()+
+        theme_classic()
+```
+Patients that stayed longer where more likely to receive an IAC. This makes sense, 
+as it is a convenient way to administer liquids intravenously.  
+This indicates that there might be some confounding between ICU stay and IAC with
+death, since patients with longer stays where more likely to die and more likely to
+receive an IAC.
+
+Lets see if these tendencies are the same for length of hospital stay:
+```{r fig.height=5}
+data %>% ggplot(aes(x = hospital_los_day, fill = paste(aline_flg, censor_flg), alpha = 0.2))+
+        geom_density()+
+        theme_classic()
+```
+Here it looks like patients that died had shorter stays (since their stay might have
+been terminated by their death), at least the patients that received an IAC.
+
+Here also patients with IAC had generally longer stays.
+
+Since the two variables measure similar things we will take a look at how correlated
+they are:
+```{r}
+cor.test(data$icu_los_day, data$hospital_los_day)
+```
+There is a significant correlation between the two.
+
+It might make sense to calculate the difference between the two to get the length of
+the hospital stay after they left the ICU:
+```{r}
+data <- data %>% mutate(hospital_los_after_icu = hospital_los_day - icu_los_day)
+```
+
+Lets look at the correlation between the new variable and the length of stay in the icu:
+```{r}
+cor.test(data$icu_los_day, data$hospital_los_after_icu)
+```
+There is still significant correlation, but its magnitude is lower.
+It might make sense to replace the `hospital_los_day` with this new variable.
+
+Lets look how those two correlate:
+```{r}
+cor.test(data$hospital_los_day, data$hospital_los_after_icu)
+```
+The correlation is quite strong, so they probably should not both be included.
+
+Lets look at the distribution of the new variable:
+```{r}
+summary(data$hospital_los_after_icu)
+```
+There is at least one negative value. Lets look at some of these records:
+```{r}
+data %>% filter(hospital_los_after_icu < 0) %>% 
+        select(hospital_los_after_icu,
+        hospital_los_day, icu_los_day, hour_icu_intime, 
+        mort_day_censored, icu_exp_flg) %>% 
+        arrange(hospital_los_after_icu) %>% 
+        head() %>% 
+        kable()
+```
+It looks like the stay in the ICU might have been recorded in hours and then 
+transformed to days, since the values are not given as integers. The same goes
+for the time until death / censoring. Those where probably calculated from the 
+`hour_icu_intime`, which give the time of admission in ICU.
+
+In most cases this leads to a negative value between -1 and 0. Those could just be set to zero.
+However there are three values where there must be a mistake in one of the two
+"length of stay" variables, since we get lower negative values. Unfortunately, We cannot draw 
+any conclusion about which of the values is wrong from `mort_day_censored` either,
+since they dont coincide with any of the two "length of stay" variables (the patients
+seem to have survived).
+
+It is also worth to be noted, that the stay in ICU for the three patients that died in the ICU
+was recorded as almost one day longer then the recorded time until death. This could
+be explained if we assume that the recorded length of stay in ICU time is defined
+from the admission until the time when another patient can take their place. This
+could be due to it being recorded primarily for reimbursement purposes.
+
+Lets set all the negative values of `hospital_los_after_icu` to zero:
+```{r}
+data[data$hospital_los_after_icu < 0, "hospital_los_after_icu"] <- 0
+```
+
+Plot the densities for the new variable for dead and censored patients:
+```{r fig.height=5}
+data %>% ggplot(aes(x = hospital_los_after_icu, fill = censor_flg, alpha = 0.2))+
+        geom_density()+
+        theme_classic()
+```
+Here we see that the censored patients had generally longer stays after ICU then the
+patients that died. The patients with values of zero and close to zero probably died
+in the ICU and the values we calculated are just due to the different rounding /
+recording of the hospital / ICU length of stay. 
+The variable `icu_exp_flg` tells us if a patient died in the ICU. We could therefore
+ set `hospital_los_after_icu` to zero for all patients that died in the ICU.
+
+While this would lead to more truthful values it could also lead to some bias, since we
+only manipulate certain values and would reduce the variance for values around zero,
+while leaving it the same for values above.
+
+Lets look at the values we would set to zero:
+```{r}
+data %>% filter(icu_exp_flg == 1) %>% 
+        select(hospital_los_after_icu) %>% 
+        summary()
+```
+There is at least one value (the maximum), that is over one and therefore unlikely to
+be due to rounding error.
+
+Lets look at all values that over one:
+```{r}
+data %>% filter(icu_exp_flg == 1 & hospital_los_after_icu > 1) %>% 
+        select(hospital_los_after_icu, icu_los_day, hospital_los_day, mort_day_censored) %>% 
+        arrange(desc(hospital_los_after_icu)) %>% 
+        tibble()
+```
+For all of the values the time from ICU admission to death is very close to the
+length of stay in the ICU, while the length of stay in the hospital is longer.
+These could be cases where the patient was already in the hospital for some time 
+before being admitted to the ICU. So for our purposes this information does not seem 
+relevant and we can set these values to zero. We will leave the values below 1 as they are.
+```{r}
+data[data$icu_exp_flg == 1 & data$hospital_los_after_icu > 1, "hospital_los_after_icu"] <- 0
+```
+
+Lets look at the `age` distribution for dead and censored patients:
+```{r fig.height=5}
+data %>% ggplot(aes(x = age, fill = censor_flg, alpha = 0.2))+
+        geom_density()+
+        theme_classic()
+```
+Patients that are older seem to have lower survival probabilities (which doesnt surprise).
+
+
+
+
 
 ```{r}
 data %>% str()
