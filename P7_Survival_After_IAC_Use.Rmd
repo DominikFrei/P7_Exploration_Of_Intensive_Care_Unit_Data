@@ -26,6 +26,8 @@ library(caret)
 library(Amelia) #missmap()
 library(mice) #imputation
 library(Hmisc) #rcorr()
+library(ggcorrplot) #ggcorrplot()
+library(car) #vif()
 ```
 Language:
 ```{r}
@@ -200,7 +202,8 @@ cor.test(data$bmi, data$weight_first)
 There is significant correlation between `weight_first` and `bmi` (which is not
 surprising, since bmi is calculated using weight and height). The remaining variation
 in the `bmi` is due to variances in height of the people. Unfortunately we dont know height.
-Nevertheless, `weight_first` would be useful if we want to impute the missing values of`bmi`.
+Since the two variables have a strong correlation, it probably makes sense to just drop `bmi`.
+Since we probably would have to choose between the two anyway if we want to fit a linear model.
 
 Lets look at the rest of the missing values. In the missingness plot, above there does not 
 seem to be too much of a pattern. There are some patients with several missing values.
@@ -463,7 +466,7 @@ cor.test(data$bun_first, as.numeric(data$renal_flg))
 ```
 There is a statistically significant correlation between the two.
 
-## Other Variables
+### Other Variables
 
 There is some information about how long the patients stayed in ICU / hospital:  
 - `icu_los_day`: length of stay in ICU (days, numeric)  
@@ -606,17 +609,241 @@ relevant and we can set these values to zero. We will leave the values below 1 a
 data[data$icu_exp_flg == 1 & data$hospital_los_after_icu > 1, "hospital_los_after_icu"] <- 0
 ```
 
+Lets look at the `age` distribution for all patients:
+```{r fig.height=5}
+data %>% ggplot(aes(x = age))+
+        geom_density()+
+        scale_x_continuous(breaks = seq(0, 100, 5))+
+        theme_classic()
+```
+There are three peaks, one in early 20s, one late 40s and one around 80.
+One could imagine, that maybe for the younger patients its more likely due to accidents,
+due to them taking more risks.
+
 Lets look at the `age` distribution for dead and censored patients:
 ```{r fig.height=5}
 data %>% ggplot(aes(x = age, fill = censor_flg, alpha = 0.2))+
         geom_density()+
+        scale_x_continuous(breaks = seq(0, 100, 5))+
         theme_classic()
 ```
 Patients that are older seem to have lower survival probabilities (which doesnt surprise).
 
+Lets look at `service_unit` and `service_num`:  
+- `service_unit``: type of service unit (character: FICU, MICU, SICU)  
+- `service_num``: service as a numeric (binary: 0 = MICU or FICU, 1 = SICU)  
+
+MICU = Medical ICU
+SICU = Surgical ICU
+FICU = Finard ICU; this is a term specific to Beth Israel Deaconess Medical Center where MIMIC-II data were collected (https://link.springer.com/chapter/10.1007/978-3-319-43742-2_21)
+```{r}
+table(data$service_unit, useNA = "always")
+```
+The source above states, that FICU is a special kind of MICU and therefore they
+relabeled it as MICU. I will do the same here:
+```{r}
+data <- data %>% mutate(service_unit = recode(service_unit, "FICU" = "MICU"))
+```
+
+`service_num` contains the same information but in numeric format. We will therefore drop it:
+```{r}
+data <- data %>% select(!service_num)
+```
+
+Lets plot the density of the patient ages split by `service_unit`: 
+```{r fig.height=5}
+data %>% ggplot(aes(x = age, fill = service_unit, alpha = 0.2))+
+        geom_density()+
+        scale_x_continuous(breaks = seq(0, 100, 5))+
+        theme_classic()
+```
+We see that more of the young patients where assigned to SICU then MICU, this
+supports our hypothesis above, that for the younger people the ICU visit might
+more likely be due to accidents.  
+For the peak around 80 its the same, although the difference is quite small.
+One could imagine that at an old age accidents increase a bit, due to reduced physical
+abilities e.g. falls etc.
+
+Lets look at the above, but also split by gender (1 = male, 0 = female):
+```{r fig.height=5}
+data %>% ggplot(aes(x = age, color = paste(service_unit, gender_num)))+
+        geom_density()+
+        scale_x_continuous(breaks = seq(0, 100, 5))+
+        theme_classic()
+```
+Here we see that for the peak in the 20s, its mostly young men, that are assigned to SICU.
+This would make sense, since they generally take more risks / are more involved in
+accidents. At an older age this is reduced. At the peak around 45 the men are more assigned to MICU.
+For the peak around 80 it seems to be mostly women that are assigned to SICU, could be
+due to falls as speculated. In general the older patients seem more likely to be women
+and the younger patients more likely to be men.  
+
+Lets also look at a histogram to see the total number of records in each category over time:
+```{r fig.height=5}
+data %>% ggplot(aes(x = age, fill = paste(service_unit, gender_num)))+
+        geom_histogram(position = "dodge")+
+        scale_x_continuous(breaks = seq(0, 100, 5))+
+        theme_classic()
+```
+We see the same tendencies as in the density plot. In total number the men that are
+assigned to SICU have almost always the highest count until after age 75. This might
+be because men have lower life expectancy.
+
+Lets look at the variables describing weekday and time of admission:  
+- `day_icu_intime`: day of week of ICU admission (character)  
+- `day_icu_intime_num`: day of week of ICU admission (numeric, corresponds with day_icu_intime)  
+- `hour_icu_intime`: hour of ICU admission (numeric, hour of admission using 24hr clock)  
+
+We will drop `day_icu_intime_num`, since its the same as `day_icu_intime`, but in numeric.
+```{r}
+data <- data %>% select(!day_icu_intime_num)
+```
+
+Reorder the factor levels for `day_icu_intime`:
+```{r}
+#look at the levels
+data$day_icu_intime %>% levels()
+#there are trailing spaces; lets remove them:
+data <- data %>% mutate(day_icu_intime = as.factor(str_trim(day_icu_intime)))
+#reorder the strings
+data <- data %>% mutate(day_icu_intime = fct_relevel(day_icu_intime, levels=c('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'))) %>% arrange(day_icu_intime)
+```
+Plot the number of ICU admissions per day:
+```{r fig.height=5}
+data %>% ggplot(aes(x = day_icu_intime))+
+        geom_bar()+
+        theme_classic()
+```
+We see a decreased number of admissions on Friday and Sunday, and an increased
+number on Saturday. On Monday and Thursday the number is slightly increased compared
+to Tuesday and Wednesday.
+
+Lets look at number over time of day:
+```{r fig.height=5}
+data %>% ggplot(aes(x = hour_icu_intime))+
+        geom_bar() +
+        scale_x_continuous(breaks = seq(0,23,1)) +
+        theme_classic()
+```
+We can see that there is an increase in cases during the night, which makes sense,
+as then, the ICU is probably the only available health service.
+
+And now look the same distribution but over the week and split for service unit:
+```{r fig.height=5}
+data %>% ggplot(aes(x = hour_icu_intime, fill = service_unit, alpha = 0.2))+
+        geom_density(kernel = "epanechnikov", bw = 3) +
+        facet_grid(~ day_icu_intime)+
+        theme_classic()
+```
+This pattern is more or less the same over the week. On Saturday morning there
+seems to be an increase (in SICU and MICU), maybe due to alcohol related accidents 
+/ poisoning.  
+Generally it look like in the first half of the day SICU receives most of its patients,
+while in the second half MICU receives most of its patients.
+
+Lets look at the clinical scores used to predict mortality:  
+- `sapsi_first`: first SAPS I score (numeric)  
+- `sofa_first`: first SOFA score (numeric)
+
+Lets plot the density of the SAPS I score split by 28 day mortality, to see if
+it is able to predict "short term mortality:
+```{r fig.height=5}
+data %>% ggplot(aes(x = sapsi_first, fill = day_28_flg, alpha = 0.2)) +
+        geom_density() +
+        theme_classic()
+```
+The two distributions are show quite some overlap.
+
+Repeat the same for the SOFA score:
+```{r fig.height=5}
+data %>% ggplot(aes(x = sofa_first, fill = day_28_flg, alpha = 0.2)) +
+        geom_density() +
+        theme_classic()
+```
+There is even more overlap.
+
+Is there a correlation between the two scores?
+```{r}
+cor.test(data$sapsi_first, data$sofa_first)
+```
+There is a significant correlation. If we will have to choose one of the two SAPS I
+might be more suitable (at least to predict short term mortality)
+
+Lets look at `iv_day_1`: input fluids by IV on day 1 (mL, numeric).
+I would suspect, that patients with an IAC would have generally higher values.
+
+Lets plot the density, split by `aline_flg`:
+```{r fig.height=5}
+data %>% ggplot(aes(x = aline_flg, y = iv_day_1)) +
+        geom_boxplot() +
+        theme_classic()
+```
+Patients with IAC generally received a bit higher volumes of i.v. liquids. The
+distributions for both groups are quite right skewed.
 
 
+### Correlations
 
+Lets look at the correlations between all the variables:
+```{r}
+cormatr <- data %>% filter(complete.cases(data) == TRUE) %>% 
+        mutate(service_unit = as.numeric(service_unit),
+               day_icu_intime = as.numeric(day_icu_intime)) %>% 
+        as.matrix() %>% 
+        rcorr()
+
+ggcorrplot(cormatr$r, p.mat = cormatr$P, hc.order = TRUE, type = "upper")
+```
+ We will go through the variables with strong correlations from top to bottom:  
+ - `service_unit` has a decently strong (negative, which is meaningless in this context, since
+ `service_unit` is an unordered factor) correlation with `resp_flag`.  
+ Lets produce a contingency table of the two:
+```{r}
+table(data$service_unit, data$resp_flg)
+```
+It looks like over proportionally many of the patients with respiratory problems 
+where assigned to MICU. This makes sense, since we could assume that the visit could
+have something to do with the respiratory problems, which are usually not treated
+surgically. 
+
+There is also a correlation with `aline_flg`. Produce a contingency table:
+```{r}
+table(data$service_unit, data$aline_flg)
+```
+In SICU most patients received IAC, while in MICU most did not.
+
+- `aline_flg` has a moderately strong correlation with `abg_count`.
+We had not previously looked at this variable more closely:
+`abg_count`: arterial blood gas count (number of tests, numeric)
+Plot a histogram :
+```{r fig.height=5}
+data %>% ggplot(aes(x = abg_count, fill = aline_flg, alpha = 0.2))+
+        geom_density() +
+        theme_classic()
+```
+It looks like for patients that had no IAC also less blood gas counts where done.
+This is probably confounded by the time the patient stayed in the hospital, since
+for shorter stays it makes less sense to apply an IAC and there is less time to 
+conduct blood gas analyses.  
+There are also less strong correlations with the length of stay in the hospital 
+or ICU respectively, which seems to point into the same direction.  
+There are also less strong  correlations with the SAPS I and SOFA scores.
+This makes sense as well, since a worse condition at admission, makes an IAC more
+necessary.
+The distribution is right skewed.
+
+
+```{r}
+vif()
+```
+
+
+```{r}
+table(data$gender_num, useNA = "ifany")
+```
+
+
+# weiter
 
 ```{r}
 data %>% str()
