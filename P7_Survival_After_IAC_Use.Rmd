@@ -9,6 +9,12 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRUE)
 ```
 
+## Abstract
+
+We run inference models for: 
+- death vs censoring (logistic regression) / or death in hospital?
+- for the group that died, day of death (linear regression)
+
 ## Resources
 
 Data Source: https://physionet.org/content/mimic2-iaccd/1.0/
@@ -218,12 +224,23 @@ sapply(data, function(x) sum(is.na(x))) %>%
         sort(decreasing = TRUE) %>% 
         data.frame()
 ```
-We will later impute the missing values.
+We could have a look if the values where not captured due to early death of the
+patients.
+```{r}
+data %>% filter(is.na(.$po2_first)) %>% select(icu_exp_flg) %>% table()
+data %>% filter(is.na(.$iv_day_1)) %>% select(icu_exp_flg) %>% table()
+data %>% filter(is.na(.$weight_first)) %>% select(icu_exp_flg) %>% table()
+data %>% filter(is.na(.$sapsi_first)) %>% select(icu_exp_flg) %>% table()
+```
+This doesn't seem to be the case (at least not systematically), since not that many 
+patients for which there a re NA values died in the icu.
+
+We will later impute these missing values.
 
 ### Variance
 
 Lets look at the variablility in certain variables. Especially for the "flag variables"
-I suspect there could be very low values, which can lead to problems (near zero variance).
+I suspect there could be a low number of flagged patients, which can lead to problems (near zero variance).
 
 Calculate the percentage in the data that have a positive (1) value for the flag
 variables:
@@ -246,13 +263,14 @@ all of the data:
 ```{r}
 nearZeroVar(data, saveMetrics = TRUE) %>% filter(zeroVar == TRUE | nzv == TRUE)
 ```
-Here renal_flg is found to be the only near zero variable in the data set 
+Here `renal_flg` is found to be the only near zero variable in the data set 
 (we had already removed `sepsis_flg` earlier, which had zero variance).
 
 ### Variables with Information about Death
 
 Some of the flag variables above are actually not flags for for medical conditions,
 but contain information about death of patients or if an IAC was used on them:
+
 - `censor_flg`: censored or death (binary: 0 = death, 1 = censored)  
 - `day_28_flg`: death within 28 days (binary: 1 = yes, 0 = no)  
 - `hosp_exp_flg`: death in hospital (binary: 1 = yes, 0 = no)
@@ -271,8 +289,6 @@ rcorr(as.matrix(data_death))
 to significantly with `day_28_flg`. The correlation coefficients however are quite small
 for all of them. This indicates that either the use of an AIC increases the risk for
 death or patients with a higher risk of death are more likely to receive monitoring via IAC.
-
-What exactly is the relation between 
 
 Lets look at contingency tables between `day_28_flg` and `hosp_exp_flg` / `icu_exp_flg`?
 Can `hosp_exp_flg` / `icu_exp_flg` only be positive if `day_28_flg` is positive?
@@ -298,7 +314,7 @@ registered as dead in `censor_flg`)
 Other then the flag variables discussed above there is also some information about
 how many days after ICU admission the person died or was censored (`mort_day_censored`).
 Create plot of the distributions over time for dead and censored patients:
-```{r}
+```{r fig.height=5}
 data %>% ggplot(aes(x = mort_day_censored, fill = censor_flg, alpha = 0.5))+
         geom_density()+
         theme_classic()+
@@ -311,7 +327,7 @@ after ICU admission, with most of them happening within maybe up until 120 days
 and that starting at around 500 days after ICU admission censoring starts.
 
 Lets plot the distribution above for only patients that had IAC:
-```{r}
+```{r fig.height=5}
 data %>% filter(aline_flg == 1) %>% 
         ggplot(aes(x = mort_day_censored, fill = censor_flg, alpha = 0.5))+
         geom_density()+
@@ -448,11 +464,13 @@ data_meas %>% filter(name %in% unique(.$name)[13:18]) %>%
         theme_bw()
 ```
 The distribution for `po2_first` is not very symetric.
+
 - `po2_first`: Partial Pressure of Oxygen in blood (mmHg, numeric): high values dont
 have a specific medical implication. They could also be explained by ventilation 
 with oxygen before the measurement.  
 
 There are lots of outliers for `pco2_first`, `bun_first` and `creatinine_first`.
+
 - `pco2_first`: first PaCO_2 (mmHg, numeric). High values can be the result of hypoventilation
 which could make sense in the context of ICU admission.
 
@@ -468,7 +486,8 @@ There is a statistically significant correlation between the two.
 
 ### Other Variables
 
-There is some information about how long the patients stayed in ICU / hospital:  
+There is some information about how long the patients stayed in ICU / hospital:
+
 - `icu_los_day`: length of stay in ICU (days, numeric)  
 - `hospital_los_day`: length of stay in hospital (days, numeric)  
 
@@ -630,11 +649,14 @@ data %>% ggplot(aes(x = age, fill = censor_flg, alpha = 0.2))+
 Patients that are older seem to have lower survival probabilities (which doesnt surprise).
 
 Lets look at `service_unit` and `service_num`:  
-- `service_unit``: type of service unit (character: FICU, MICU, SICU)  
-- `service_num``: service as a numeric (binary: 0 = MICU or FICU, 1 = SICU)  
+
+- `service_unit`: type of service unit (character: FICU, MICU, SICU)  
+- `service_num`: service as a numeric (binary: 0 = MICU or FICU, 1 = SICU)  
 
 MICU = Medical ICU
+
 SICU = Surgical ICU
+
 FICU = Finard ICU; this is a term specific to Beth Israel Deaconess Medical Center where MIMIC-II data were collected (https://link.springer.com/chapter/10.1007/978-3-319-43742-2_21)
 ```{r}
 table(data$service_unit, useNA = "always")
@@ -642,7 +664,7 @@ table(data$service_unit, useNA = "always")
 The source above states, that FICU is a special kind of MICU and therefore they
 relabeled it as MICU. I will do the same here:
 ```{r}
-data <- data %>% mutate(service_unit = recode(service_unit, "FICU" = "MICU"))
+data <- data %>% mutate(service_unit = recode_factor(service_unit, "FICU" = "MICU"))
 ```
 
 `service_num` contains the same information but in numeric format. We will therefore drop it:
@@ -659,7 +681,7 @@ data %>% ggplot(aes(x = age, fill = service_unit, alpha = 0.2))+
 ```
 We see that more of the young patients where assigned to SICU then MICU, this
 supports our hypothesis above, that for the younger people the ICU visit might
-more likely be due to accidents.  
+more likely be due to accidents, which would more often have to be treated by surgery.  
 For the peak around 80 its the same, although the difference is quite small.
 One could imagine that at an old age accidents increase a bit, due to reduced physical
 abilities e.g. falls etc.
@@ -784,7 +806,7 @@ distributions for both groups are quite right skewed.
 
 ### Correlations
 
-Lets look at the correlations between all the variables:
+Lets look at pairwise correlations between all the variables:
 ```{r}
 cormatr <- data %>% filter(complete.cases(data) == TRUE) %>% 
         mutate(service_unit = as.numeric(service_unit),
@@ -832,14 +854,26 @@ This makes sense as well, since a worse condition at admission, makes an IAC mor
 necessary.
 The distribution is right skewed.
 
+- `hospital_los_after_icu` correlates with `hospital_los_day`, which makes sense,
+since `hospital_los_after_icu` + `icu_los_day` = `hospital_los_day`.
+We will drop `hospital_los_day` before we beginn with the modeling.
+
+- `hospital_los_day` correlates with `abg_count` as well and could be explained in a similar fashion.
+it is also correlated with `icu_los_day`, which makes sense since icu is a subset of the hospital
+so to say (which is why we calculated `hospital_los_after_icu`).
+
+- `censor_flg` and `mort_day_censored` correlate with each other and both correlate
+with `icu_exp_flg`, `hosp_exp_flg` and `day_28_flg`. We have already
+discusse dthis above.
+
 
 ```{r}
-vif()
+#vif()
 ```
 
 
 ```{r}
-table(data$gender_num, useNA = "ifany")
+#table(data$gender_num, useNA = "ifany")
 ```
 
 
@@ -859,19 +893,19 @@ for the use of AIC but might be just general risk factors.
 
 Are there sufficient records for patients on which an IAC was used?
 ```{r}
-table(data$aline_flg)
+#table(data$aline_flg)
 ```
 
 Subset the data and drop the `aline_flg` variable:
 ```{r}
-data_sub <- data %>% filter(aline_flg == 1) %>% 
-        select(!aline_flg)
+#data_sub <- data %>% filter(aline_flg == 1) %>% 
+#        select(!aline_flg)
 ```
 
 Lets look at missing values.
 Produce a missingnes plot for all the columns where there are missing values:
 ```{r}
-missmap(data_sub[,colSums(is.na(data_sub)) > 0], main = "Missingness Map: Patients with AIC")
+#missmap(data_sub[,colSums(is.na(data_sub)) > 0], main = "Missingness Map: Patients with AIC")
 ```
 
 
