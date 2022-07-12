@@ -224,6 +224,10 @@ sapply(data, function(x) sum(is.na(x))) %>%
         sort(decreasing = TRUE) %>% 
         data.frame()
 ```
+For the variable with the next highest amount of missing values (po2_first), there
+are around 10 % of the data missing. This is not ideal, but we will leave the variables
+in.
+
 We could have a look if the values where not captured due to early death of the
 patients.
 ```{r}
@@ -233,7 +237,7 @@ data %>% filter(is.na(.$weight_first)) %>% select(icu_exp_flg) %>% table()
 data %>% filter(is.na(.$sapsi_first)) %>% select(icu_exp_flg) %>% table()
 ```
 This doesn't seem to be the case (at least not systematically), since not that many 
-patients for which there a re NA values died in the icu.
+patients for which there are NA values died in the icu.
 
 We will later impute these missing values.
 
@@ -413,9 +417,10 @@ It has to be noted, that SPO2 is not used in the calculation of SAPS II.
 For the SOFA score the maximal value is 24, so the values are not that critical either.
 SPO2 is not used in the calculation of the SOFA score either.
 
-It is unclear to me if these measurements where wrong or not. We could
-possibly replace them with NAs and impute them later. I think it also depends on the weight
-these outliers would get in a model
+We will assume, that these measurements are wrong and set them to NA to impute them later:
+```{r}
+data[which(data$spo2_1st < 50), "spo2_1st"] <- NA
+```
 
 - There are some high values for `weight_first`, which is plausible (obese patients).  
 - There is an extremely low value for `temp_1st`. lets have a look at it:
@@ -864,71 +869,113 @@ so to say (which is why we calculated `hospital_los_after_icu`).
 
 - `censor_flg` and `mort_day_censored` correlate with each other and both correlate
 with `icu_exp_flg`, `hosp_exp_flg` and `day_28_flg`. We have already
-discusse dthis above.
+discussed this above.
 
+- `chloride_first` correlates with `sodium_first` might be that both are influenced by
+NaCl intake.
 
+- `abg_count` correlates with `icu_los_day`, again probably due to longer stays 
+in the icu leading to more blood cell counts being made.
+
+- `day_28_flg`, `hosp_exp_flg` and `icu_exp_flg` all correlate with each other,
+which makes sense since they overlap, meaning somebody that died in the icu also
+died in the hospital and possibly within 28 days after icu admission.
+
+## Imputation
+
+As discussed the `bmi` variable will not be imputed and now dropped from the dataset,
+since it is correlated quite strongly with `weight_first`. It would also probably not
+be of use for imputation of `weight_first`, since in most cases the `bmi` is also NA,
+where `weight_first` is NA.
 ```{r}
-#vif()
+data <- data %>% select(!bmi)
 ```
 
 
+For the other missing values we will use Multivariate Imputation by Chained Equations (mice).
+We will use all the data (except the 2 variables we have already dropped) for the
+imputation:
 ```{r}
-#table(data$gender_num, useNA = "ifany")
+imp <- mice(data, print=F, seed = 1)
 ```
 
-
-# weiter
-
+Lets look at the imputed values of `spo2_1st` (which we had previously set to NA,
+since they where exceptionally low).
 ```{r}
-data %>% str()
+imp$imp$spo2_1st
 ```
 
--------
+All of them are quite high / in the normal range, except one iteration for
+one data point at 71.
 
-The main question we will pose is: Which of the available variables in the data set are useful
-for predicting death within 28 days, after the use of an indwelling arterial catheter (IAC)?
-
-It is important to note that these risk factors will likely not be very specific
-for the use of AIC but might be just general risk factors.
-
-Are there sufficient records for patients on which an IAC was used?
+Lets show some overviews fo the imputed (red) and the other data (blue):
 ```{r}
-#table(data$aline_flg)
-```
-
-Subset the data and drop the `aline_flg` variable:
-```{r}
-#data_sub <- data %>% filter(aline_flg == 1) %>% 
-#        select(!aline_flg)
-```
-
-Lets look at missing values.
-Produce a missingnes plot for all the columns where there are missing values:
-```{r}
-#missmap(data_sub[,colSums(is.na(data_sub)) > 0], main = "Missingness Map: Patients with AIC")
-```
-
-
-
-We will try to impute the missing values by using the mice::mice function.
-
-It might be useful to have more data to do this, so we will do the imputation on
-the whole data set.
-Lets first look at a missingnes map of the whole dataset.
-
-
-Fo the complete dataset, there is overall a bit more data missing and some variables
-contain relatively more missing values. The overall patern (a chunk of missing values
-for `bmi`) however, is the same.
-
-Perform imputation only for subet data:
-```{r message=FALSE, cache=TRUE}
-#data_imp <- mice(data_sub)
+stripplot(imp)
 ```
 
 ```{r}
-#plot(data_imp)
+densityplot(imp)
 ```
+
+The imputed data seems to be quite close to the other data and therefore plausible.
+
+Get the imputed data:
+```{r}
+data_imp <- complete(imp)
+```
+
+## Model 1: death within 28 days as outcome variable
+
+We will fit a logistic regression model with `day_28_flg` as outcome, with the goal to identify
+which of the variables are correlated with death shortly after icu admission.
+
+### Selection of Variables
+
+First we will exclude variables that contain information about the treatment outcome,
+such as length of stay in icu / hospital / death / censoring etc.. Since they are only available "after the fact" /
+when the outcome of the treatment is already (more) clear:
+```{r}
+data_28d <- data_imp %>% select(!c(hospital_los_after_icu, 
+                                   hospital_los_day, 
+                                   icu_los_day, 
+                                   hosp_exp_flg, 
+                                   icu_exp_flg, 
+                                   censor_flg, 
+                                   mort_day_censored))
+```
+
+By excluding these variables, we also get rid of most of the variables, that showed
+strong correlations with other independent variables.
+
+Then we will also exclude duplicated variables (e.g. numeric representations of other variables):
+```{r}
+data_28d <- data_28d %>% select(!c(service_num,
+                                   day_icu_intime_num))
+```
+
+
+We will now fit a first model and then investigate the variance inflation factors
+to assess multicolinearity and decide if any further variables should be excluded from the model.
+
+For example we we could consider to only include one clinical score (SOFA I or SAPSI)
+
+## Exploratory Modeling
+
+Fit first model:
+```{r}
+mlreg_1 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+
+summary(mlreg_1)
+```
+
+
+
+```{r}
+vif()
+```
+
+
+
 
 
 - Use vif to assess multicolinearity.
