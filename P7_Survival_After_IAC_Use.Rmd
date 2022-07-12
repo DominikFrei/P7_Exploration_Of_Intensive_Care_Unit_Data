@@ -1035,111 +1035,68 @@ This reduced the vif value for `chloride_first`.
 summary(mlreg_3)
 ```
 
-We will now go on to remove always the variable with the highest p-value:
-```{r}
-data_28d <- data_28d %>% select(!platelet_first)
-mlreg_4 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_4)
-```
-```{r}
-data_28d <- data_28d %>% select(!pco2_first)
-mlreg_5 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_5)
-```
-```{r}
-data_28d <- data_28d %>% select(!service_unit)
-mlreg_6 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_6)
-```
-```{r}
-data_28d <- data_28d %>% select(!copd_flg)
-mlreg_7 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_7)
-```
-```{r}
-data_28d <- data_28d %>% select(!spo2_1st )
-mlreg_8 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_8)
-```
-```{r}
-data_28d <- data_28d %>% select(!cad_flg)
-mlreg_9 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_9)
-```
-```{r}
-data_28d <- data_28d %>% select(!iv_day_1)
-mlreg_10 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_10)
-```
-```{r}
-data_28d <- data_28d %>% select(!tco2_first)
-mlreg_11 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_11)
-```
-```{r}
-data_28d <- data_28d %>% select(!po2_first)
-mlreg_12 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_12)
-```
-```{r}
-data_28d <- data_28d %>% select(!potassium_first)
-mlreg_13 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_13)
-```
-```{r}
-data_28d <- data_28d %>% select(!abg_count)
-mlreg_14 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_14)
-```
-```{r}
-data_28d <- data_28d %>% select(!aline_flg)
-mlreg_14 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_14)
-```
-```{r}
-data_28d <- data_28d %>% select(!map_1st)
-mlreg_15 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_15)
-```
-```{r}
-data_28d <- data_28d %>% select(!chf_flg)
-mlreg_16 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_16)
-```
-```{r}
-data_28d <- data_28d %>% select(!liver_flg)
-mlreg_17 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_17)
-```
-```{r}
-data_28d <- data_28d %>% select(!wbc_first)
-mlreg_18 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_18)
-```
-```{r}
-data_28d <- data_28d %>% select(!renal_flg)
-mlreg_19 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
-summary(mlreg_19)
-```
+We will now write a backwards selection function, which in every step removes the variable
+with the highest p-value.
 
+In order for my function to work properly I will reformat the variables `service_unit`
+and rename `iv_day_1`:
 ```{r}
-a <- coef(summary(mlreg_19)) %>% data.frame() %>% rename(., pval = "Pr...z..") %>% .[-1,]
-colnames(a)
-to_exc <- a[which(a$pval == max(a$pval)),]
+data_28d <- data_28d %>% mutate(service_unit = as.factor(case_when(service_unit == "SICU" ~ 1,
+                                             service_unit == "MICU" ~ 0)))
+
+data_28d <- data_28d %>% rename(iv_day_1st = iv_day_1)
 ```
 
 
 Write backwards selection function:
 ```{r}
-back_sel_logreg <- function(dataset, outcome){
-        model <- glm(outcome ~ ., family = "binomial", data = dataset)
-        coefs <- coef(summary(model)) %>% data.frame() %>% rename(., pval = "Pr...z..") %>% .[-1,]
-        to_exc <- coefs[which(coefs$pval == max(coefs$pval)),]
-        if (to_exc$pval < 0.05) {
-                return(model)
+back_sel_logreg <- function(dataset){
+        #set up table to collect statistics
+        stats <- data.frame(matrix(nrow = 0, ncol = 5))
+        colnames(stats) <- c("Iteration", "removed", "pval", "res_dev", "AIC")
+        #set up variables
+        pmax <- 1
+        iteration <- 1
+        while (pmax > 0.05) {
+                #fit model / extract coefficients etc
+                model <- glm(day_28_flg ~ ., family = "binomial", data = dataset)
+                coefs <- coef(summary(model)) %>% data.frame() %>% rename(., pval = "Pr...z..") %>% .[-1,]
+                #find highest pvalue, to exclude
+                to_exc <- coefs[which(coefs$pval == max(coefs$pval)),]
+                #save stats
+                stats <- rbind(stats, 
+                                   c(iteration, 
+                                     rownames(to_exc),
+                                     to_exc$pval,
+                                     model$deviance,
+                                     model$aic))
+                #update variables
+                pmax <- to_exc$pval
+                iteration <- iteration + 1
+                
+                #get name of variable to remove
+                to_exc_name <- rownames(to_exc) %>% str_remove(., "[1-9]$")
+                #remove variable from dataframe
+                dataset <- dataset %>% select(!to_exc_name)
         }
+        return(list(stats, model))
 }
 ```
+
+
+```{r}
+back_sel <- back_sel_logreg(dataset = data_28d)
+```
+
+```{r}
+summary(back_sel[[2]])
+```
+
+```{r}
+back_sel[[1]]
+```
+
+
 
 
 ```{r}
