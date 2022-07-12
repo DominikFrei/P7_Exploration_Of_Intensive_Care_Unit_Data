@@ -947,13 +947,6 @@ data_28d <- data_imp %>% select(!c(hospital_los_after_icu,
 By excluding these variables, we also get rid of most of the variables, that showed
 strong correlations with other independent variables.
 
-Then we will also exclude duplicated variables (e.g. numeric representations of other variables):
-```{r}
-data_28d <- data_28d %>% select(!c(service_num,
-                                   day_icu_intime_num))
-```
-
-
 We will now fit a first model and then investigate the variance inflation factors
 to assess multicolinearity and decide if any further variables should be excluded from the model.
 
@@ -961,21 +954,195 @@ For example we we could consider to only include one clinical score (SOFA I or S
 
 ## Exploratory Modeling
 
+I realized that we probably should not fit a model with `hour_icu_intime` as integer,
+since we would not expect a linear relationship with death over time, but there might be
+some times where generally more severe cases arrive at the icu.
+I will transform it to a factor:
+```{r}
+data_28d$hour_icu_intime <- as.factor(data_28d$hour_icu_intime)
+```
+
 Fit first model:
 ```{r}
 mlreg_1 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
 
 summary(mlreg_1)
 ```
+For `hour_icu_intime` there is one of the factor levels, that shows a 
+significant correlation with the outcome. I would expect this to be a coincidence,
+since we have 24 levels, we would expect at least one of them to have a p-value with the outcome
+below 0.05 just by chance.
 
+Lets plot `hour_icu_intime` against the relative frequencies of the outcomes:
+```{r fig.height=5}
+data_28d %>% ggplot(aes(x = hour_icu_intime, fill = day_28_flg)) +
+        geom_bar(position="fill") +
+        theme_classic()
+```
+There doesnt look to be any real tendency here.
+We will drop this variable from the model.
 
+Lets repeat the same plot with `day_icu_intime`:
+```{r fig.height=5}
+data_28d %>% ggplot(aes(x = day_icu_intime, fill = day_28_flg)) +
+        geom_bar(position="fill") +
+        theme_classic()
+```
+There dont seem to be any patterns here either.
+
+Exclude the two variables:
+```{r}
+data_28d <- data_28d %>% select(!c(day_icu_intime,
+                                   hour_icu_intime))
+```
+
+Fit model:
+```{r}
+mlreg_2 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+
+summary(mlreg_2)
+```
+
+Lets have a look at possible multicolinearity within the remaining data:
+```{r}
+vif(mlreg_2) %>% sort()
+```
+In general values under 5 are ok.
+
+We can see that `sodium_first` and `chloride_first` have the highest values,
+which might be due to their colinearity, as observed previously. The same could 
+be true for `bun_first` and `creatinine_first`, or `tco2_first` and `pco2_first`.
+
+pco2 measures the co2 in the blood and tco2 measures the total co2 in the blood 
+(including co2 solved in water).
+
+Since in the above model the coefficient for `sodium_first` doesnt significantly
+differ from zero and the one for `chloride_first` does, we will now remove `sodium_first`
+from the dataset:
+```{r}
+data_28d <- data_28d %>% select(!c(sodium_first))
+```
+
+Fit model:
+```{r}
+mlreg_3 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+
+vif(mlreg_3) %>% sort()
+```
+This reduced the vif value for `chloride_first`.
 
 ```{r}
-vif()
+summary(mlreg_3)
+```
+
+We will now go on to remove always the variable with the highest p-value:
+```{r}
+data_28d <- data_28d %>% select(!platelet_first)
+mlreg_4 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_4)
+```
+```{r}
+data_28d <- data_28d %>% select(!pco2_first)
+mlreg_5 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_5)
+```
+```{r}
+data_28d <- data_28d %>% select(!service_unit)
+mlreg_6 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_6)
+```
+```{r}
+data_28d <- data_28d %>% select(!copd_flg)
+mlreg_7 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_7)
+```
+```{r}
+data_28d <- data_28d %>% select(!spo2_1st )
+mlreg_8 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_8)
+```
+```{r}
+data_28d <- data_28d %>% select(!cad_flg)
+mlreg_9 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_9)
+```
+```{r}
+data_28d <- data_28d %>% select(!iv_day_1)
+mlreg_10 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_10)
+```
+```{r}
+data_28d <- data_28d %>% select(!tco2_first)
+mlreg_11 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_11)
+```
+```{r}
+data_28d <- data_28d %>% select(!po2_first)
+mlreg_12 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_12)
+```
+```{r}
+data_28d <- data_28d %>% select(!potassium_first)
+mlreg_13 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_13)
+```
+```{r}
+data_28d <- data_28d %>% select(!abg_count)
+mlreg_14 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_14)
+```
+```{r}
+data_28d <- data_28d %>% select(!aline_flg)
+mlreg_14 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_14)
+```
+```{r}
+data_28d <- data_28d %>% select(!map_1st)
+mlreg_15 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_15)
+```
+```{r}
+data_28d <- data_28d %>% select(!chf_flg)
+mlreg_16 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_16)
+```
+```{r}
+data_28d <- data_28d %>% select(!liver_flg)
+mlreg_17 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_17)
+```
+```{r}
+data_28d <- data_28d %>% select(!wbc_first)
+mlreg_18 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_18)
+```
+```{r}
+data_28d <- data_28d %>% select(!renal_flg)
+mlreg_19 <- glm(day_28_flg ~ ., family = "binomial", data = data_28d)
+summary(mlreg_19)
+```
+
+```{r}
+a <- coef(summary(mlreg_19)) %>% data.frame() %>% rename(., pval = "Pr...z..") %>% .[-1,]
+colnames(a)
+to_exc <- a[which(a$pval == max(a$pval)),]
 ```
 
 
+Write backwards selection function:
+```{r}
+back_sel_logreg <- function(dataset, outcome){
+        model <- glm(outcome ~ ., family = "binomial", data = dataset)
+        coefs <- coef(summary(model)) %>% data.frame() %>% rename(., pval = "Pr...z..") %>% .[-1,]
+        to_exc <- coefs[which(coefs$pval == max(coefs$pval)),]
+        if (to_exc$pval < 0.05) {
+                return(model)
+        }
+}
+```
 
 
+```{r}
+data_28d %>% str()
+```
 
-- Use vif to assess multicolinearity.
