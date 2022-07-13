@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRUE)
+knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=5, fig.fullwidth=TRUE)
 ```
 
 ## Abstract
@@ -34,6 +34,7 @@ library(mice) #imputation
 library(Hmisc) #rcorr()
 library(ggcorrplot) #ggcorrplot()
 library(car) #vif()
+library(caret)
 ```
 Language:
 ```{r}
@@ -927,7 +928,7 @@ data_imp <- complete(imp)
 ## Model 1: death within 28 days as outcome variable
 
 We will fit a logistic regression model with `day_28_flg` as outcome, with the goal to identify
-which of the variables are correlated with death shortly after icu admission.
+which of the variables are correlated with death within 28 days after icu admission.
 
 ### Selection of Variables
 
@@ -1036,7 +1037,8 @@ summary(mlreg_3)
 ```
 
 We will now write a backwards selection function, which in every step removes the variable
-with the highest p-value.
+with the highest p-value, until all p-values are below 0.05 (excluding the intercept,
+since we cannot remove that).
 
 In order for my function to work properly I will reformat the variables `service_unit`
 and rename `iv_day_1`:
@@ -1046,7 +1048,6 @@ data_28d <- data_28d %>% mutate(service_unit = as.factor(case_when(service_unit 
 
 data_28d <- data_28d %>% rename(iv_day_1st = iv_day_1)
 ```
-
 
 Write backwards selection function:
 ```{r}
@@ -1083,23 +1084,304 @@ back_sel_logreg <- function(dataset){
 }
 ```
 
-
+Run the function:
 ```{r}
 back_sel <- back_sel_logreg(dataset = data_28d)
 ```
-
-```{r}
-summary(back_sel[[2]])
-```
-
+The function returns a list containing the smallest model and a dataframe that documents
+the process of removing variables:
 ```{r}
 back_sel[[1]]
 ```
 
+Lets make some plots with this.
+Save and reformat:
+```{r}
+
+back_sel_logreg_stats <- back_sel[[1]]
+colnames(back_sel_logreg_stats) <- c("iteration", "removed", "pval", "res_dev", "AIC")
+back_sel_logreg_stats <- back_sel_logreg_stats %>% 
+        mutate(iteration = as.numeric(iteration),
+               pval = as.numeric(pval),
+               res_dev = as.numeric(res_dev),
+               AIC = as.numeric(AIC))
+```
+
+Display the p values of the removed variables in the respective models:
+```{r}
+back_sel_logreg_stats %>% ggplot(aes(x = reorder(removed, iteration), y = pval, group=1)) +
+        geom_line() +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        geom_hline(yintercept = 0.05, color = "red")
+```
+In this plot we can see the order in which the variables where removed and "how
+close" they where to give a significant contribution to the respective models.
+The cut off of p = 0.05 is marked in red.
+The most relevant part here is probably, the few most right data points. We see that
+in the next to last model, the coefficient for `renal_flg` was close to differ 
+significantly from zero. The next variable that would be removed would be 
+`chloride_first`.
+
+Display the AIC and Residual deviances in the respective models:
+```{r}
+back_sel_logreg_stats[1:17,] %>% ggplot(aes(x = iteration)) +
+        geom_line(aes(y = AIC, color = "red")) +
+        geom_line(aes(y = res_dev, color = "blue")) +
+        theme_classic() +
+        ylab("Measure") +
+        scale_x_continuous(breaks = 1:20) +
+        scale_color_manual(values=c("red", "blue"), 
+                       name="Measure",
+                       labels=c("AIC", "Residual Deviance"))
+```
+We can see that over the course of removing the "non significant" variables, 
+the Residual Deviance increased monotonically, while the AIC got smaller and then
+increased a bit when `renal_flg` was removed.
+
+We would expect the residual deviance to rise and the AIC to get lower, when removing
+the non significant variables from the model. That the AIC rises a little bit, when we
+remove `renal_flg` could be an indication, that it might be relevant to the outcome
+and might also have been found to be significant with more data.
+
+Lets look at the model, that only contains variables that contribute significantly to
+the model:
+```{r}
+summary(back_sel[[2]])
+```
+We see that the Intercept is not significant. This is not a problem, since it makes
+a prediction for patients, that are zero years old, where measured to have a body
+temperature of zero F etc. so it doesnt have a practical meaning here.
+
+We will now go trhough the included variables and discuss them:
+
+"General" patient attributes:
+- Age
+- Gender
+- Weight
+
+Higher age is quite a well known risk factor. So is male gender, with males
+having generally a lower life expectancy.
+
+What surprised me is the that the coefficient of weight is negative, meaning lower
+weight increases the risk for death within 28 days. I would have expected the opposite,
+since overweight is quite well known to produce cardiovascular problems etc. It is
+possible however that because the model also includes the flags for stroke and arterial 
+fibrilation, this is mostly 
+adjusted for, and a higher weight means more "reserves" for recovery.
+
+I would suspect that the BMI, we had previously dropped from the data, since there 
+where too many missing values would be a better predictor, since it is probably 
+more medically relevant, as the height differences between patients are adjusted for.
+
+We will fit two models for these variables with `day_28_flg` as outcome.
+We will drop all the records, where bmi is missing. This should not be a problem, 
+as it seems like the values are missing randomly:
+
+Load in the data set again:
+```{r}
+data_w_bmi <- read.csv(file = "Data/full_cohort_data.csv",
+                 stringsAsFactors = TRUE)
+```
+
+Subset:
+```{r}
+data_w_bmi <- data_w_bmi %>% 
+        select(day_28_flg, bmi, weight_first, gender_num, age) %>% 
+        filter(complete.cases(.))
+```
+
+Fit the models:
+
+- BMI
+```{r}
+mlreg_bmi <- glm(day_28_flg ~ bmi, family = "binomial", data = data_w_bmi)
+summary(mlreg_bmi)
+```
+
+- weight
+```{r}
+mlreg_w <- glm(day_28_flg ~ weight_first, family = "binomial", data = data_w_bmi)
+summary(mlreg_w)
+```
+
+Both variables have a significant correlation with the outcome. Weight has a lower p-value
+and the AIC for the model with weight is lower then for the model with bmi. This is
+unexpected.
+
+What probably confounds the weight the most, is gender. Lets fit two models that also include gender.
+
+- BMI
+```{r}
+mlreg_bmi2 <- glm(day_28_flg ~ bmi + gender_num, family = "binomial", data = data_w_bmi)
+summary(mlreg_bmi2)
+```
+
+- weight
+```{r}
+mlreg_w2 <- glm(day_28_flg ~ weight_first + gender_num, family = "binomial", data = data_w_bmi)
+summary(mlreg_w2)
+```
+These results are quite interesting. In the model with weight, the gender
+variable is not significant. I suspect, that this is due to the weight variable
+acting also as a proxy for gender here, so since it also contains some information
+about gender, the addition of the gender variable doesnt add anything.
+
+Clinical Scores:
+- SOFA score
+- SAPS I score
+
+These we would also expect to be included in the model, since they where developed to
+assess the risk for mortality in the ICU (SOFA) and to assess the general physiological
+state of patients (SAPS I).
+
+Diseases / Events / Diagnoses:
+- Atrial fibrillation
+- Stroke
+- Malignancy
+- Respiratory Disease
+
+It is not quite clear to me why these are included in the model, while others did not
+make it in (such as Congestive heart failure). It is possible that for some the
+lab values give the same information, but preciser, 
+e.g. for renal disease => Creatinine / Blood Urea Nitrogen give information not only
+on the presence of a renal disease, but also its severity.
+
+Lab values:
+- Heart Rate
+- Temperature
+- Hemoglobin
+- Chloride
+- Blood Urea Nitrogen
+- Creatinine
+
+Heart rate and temperature seem obvious to be important for the acute outcome.
+For the rest I lack the domain knowledge to discuss much about it.
+
+## Check model assumptions
+
+### Linearity assumption
+
+For the numeric variables used in the model we will have to check if there is 
+a linear relationship with the logit of the outcome.
+
+filter for numeric predictors:
+```{r}
+data_28d_linas <- data_28d %>% select(age, weight_first, sapsi_first, sofa_first, hr_1st, temp_1st, hgb_first, chloride_first, bun_first, creatinine_first)
+```
+
+Get predicted probabilities from model:
+```{r}
+data_28d_linas <- predict(back_sel[[2]], type = "response") %>% bind_cols(pred_p = ., data_28d_linas)
+```
+
+Add the logit to the data:
+```{r}
+data_28d_linas <- data_28d_linas %>%
+  mutate(logit = log(pred_p/(1-pred_p))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+```
+
+
+```{r}
+data_28d_linas %>% filter(predictors != "pred_p") %>% ggplot(aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() + 
+  facet_wrap(~predictors, scales = "free_y")
+```
+A linear fit seems to be the most reasonable for all variables, however for some there is quite a lot
+of noise e.g. `hr_1st` and `temp_1st`.
+
+For `creatinine_first` it is hard to see. Therefore, we will repeat the plot without some of the outliers:
+```{r}
+data_28d_linas %>% filter(predictors == "creatinine_first") %>% ggplot(aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() +
+  ylim(c(0, 2.5))      
+```
+Doesn't look to well.
+
+Lets see what happens if we exclude the variables with the least linear fit:
+
+- `hr_1st`
+- `temp_1st`
+- `creatinine_first`
+
+```{r}
+mlreg_nlexcl <- glm(day_28_flg ~ age + gender_num + weight_first + sapsi_first + 
+    sofa_first + afib_flg + stroke_flg + mal_flg + resp_flg + hgb_first + chloride_first + bun_first, 
+    family = "binomial", 
+    data = data_28d)
+summary(mlreg_nlexcl)
+```
+In this model `chloride_first` and `bun_first` are "no longer significant". Maybe they
+only contribute significantly if adjusted with one of the values we have excluded.
+My guess would be on `creatinine_first`, just because it is the only one we removed that
+is a lab value and is therefore more likely to interplay with these two.
+
+Lets introduce `creatinine_first` again:
+```{r}
+mlreg_nlexcl2 <- glm(day_28_flg ~ age + gender_num + weight_first + sapsi_first + 
+    sofa_first + afib_flg + stroke_flg + mal_flg + resp_flg + hgb_first + chloride_first + bun_first + creatinine_first, 
+    family = "binomial", 
+    data = data_28d)
+summary(mlreg_nlexcl2)
+```
+This seems to be the case, as in this model their coefficients are significantly different
+from zero again (or close to it for `chloride_first`).
+
+Should we drop them or leave them in the model????
+
+### Influential values
+
+```{r}
+plot(back_sel[[2]], which = 4, id.n = 3)
+```
+Looks ok.
+
+### Multicollinearity
+
+We had alreads looked at this before we fit this model. Lets look at it again
+with only the included variables:
+```{r}
+vif(back_sel[[2]]) %>% sort()
+```
+This is fulfilled as none of the values are over 5.
+
 
 
 
 ```{r}
-data_28d %>% str()
+back_sel[[2]] %>% summary()
 ```
+
+
+## Model 2: Predict the day of death for patients that died
+
+We will fit a linear regression model with `mort_day_censored` as outcome, with the goal 
+to predict the time until death after icu admission:
+```{r}
+data_dd <- data_imp %>% filter(censor_flg == 0) %>% 
+                        select(!c(hospital_los_after_icu, 
+                                   hospital_los_day, 
+                                   icu_los_day, 
+                                   hosp_exp_flg, 
+                                   icu_exp_flg, 
+                                   censor_flg,
+                                   day_28_flg))
+```
+
+
+```{r}
+mlreg_dd <- lm(mort_day_censored ~ ., data = data_dd)
+summary(mlreg_dd)
+```
+
+
+
+
+
+
 
