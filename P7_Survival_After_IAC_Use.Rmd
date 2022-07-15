@@ -35,7 +35,7 @@ library(Hmisc) #rcorr()
 library(ggcorrplot) #ggcorrplot()
 library(car) #vif()
 library(caret)
-library(olsrr)
+library(elasticnet)
 ```
 Language:
 ```{r}
@@ -1401,21 +1401,38 @@ data_los_icu <- data_imp %>% select(!c(hospital_los_after_icu,
                                    day_28_flg))
 ```
 
-# weiter DATA Partition
-
-Since our goal is prediction we will do a threeway split, train:test:validation (6:2:2)
+Since our goal is prediction we will do a three way split, train:test:validation (6:2:2)
 ```{r}
-createDataPartition(data_los_icu$log_icu_los_day, times = 3, p = c(6,2,2))
+#set seed
+set.seed(1)
+
+#partition for training set
+train <- createDataPartition(data_los_icu$icu_los_day, p = 0.6, list = FALSE)
+
+#create training set
+data_los_icu_train <- data_los_icu[train,]
+
+data_los_icu_rest <- data_los_icu[-train,]
+
+#partition for testing set
+test <- createDataPartition(data_los_icu_rest$icu_los_day, p = 0.5, list = FALSE)
+
+#create testing set
+data_los_icu_test <- data_los_icu_rest[test,]
+#create validation set
+data_los_icu_val <- data_los_icu_rest[-test,]
 ```
 
+We will continue to explore the data just with the training set.
 
+Show overview of the outcome variable:
 ```{r}
-data_los_icu$icu_los_day %>% summary()
+data_los_icu_train$icu_los_day %>% summary()
 ```
 
 Lets show the distribution of the outcome variable:
 ```{r}
-data_los_icu %>% ggplot(aes(x = icu_los_day)) +
+data_los_icu_train %>% ggplot(aes(x = icu_los_day)) +
         geom_density() +
         theme_classic()
 ```
@@ -1425,7 +1442,7 @@ since we can formulate the problem as how many patients are released from ICU wi
 
 Show distribution of Log transformed `icu_los_day`:
 ```{r}
-data_los_icu %>% ggplot(aes(x = log(icu_los_day))) +
+data_los_icu_train %>% ggplot(aes(x = log(icu_los_day))) +
         geom_density() +
         theme_classic()
 ```
@@ -1433,18 +1450,18 @@ This looks better, even if not perfect.
 
 Lets replace icu_los_day with its logarithmized version:
 ```{r}
-data_los_icu <- data_los_icu %>% 
+data_los_icu_train <- data_los_icu_train %>% 
         mutate(log_icu_los_day = log(icu_los_day)) %>% 
         select(!icu_los_day)
 ```
 
 Fit a model including all of the available variables:
 ```{r}
-mlreg_los_icu <- lm(log_icu_los_day ~ ., data = data_los_icu[, names(data_los_icu) != "icu_exp_flg"])
+mlreg_los_icu <- lm(log_icu_los_day ~ ., data = data_los_icu_train[, names(data_los_icu_train) != "icu_exp_flg"])
 summary(mlreg_los_icu)
 ```
 
-The model is not that good in predicting the los (adj R2 = 0.4622).
+The model is not that good in predicting the los (adj R2 = 0.4764).
 
 The variables that show a coefficient, which significantly differs from zero are among others
 the variables that describe measures taken in the ICU: `aline_flg`, `iv_day_1`, `abg_count`
@@ -1457,7 +1474,7 @@ demographics, diagnostics and clinical scores available to us.
 
 Exclude these columns:
 ```{r}
-data_los_icu <- data_los_icu %>% select(!c(aline_flg, iv_day_1, abg_count))
+data_los_icu_train <- data_los_icu_train %>% select(!c(aline_flg, iv_day_1, abg_count))
 ```
 
 We should investigate of what importance the service unit is. Does it
@@ -1466,11 +1483,11 @@ in the hospital, for patients treated surgically or by internal medicine.
 
 How many patients where in which service unit?
 ```{r}
-data_los_icu$service_unit %>% table()
+data_los_icu_train$service_unit %>% table()
 ```
 Show a violin plot of the log lenght of stay in ICU for each of the two service units:
 ```{r fig.width=5}
-data_los_icu %>% ggplot(aes(y = log_icu_los_day, x = service_unit)) +
+data_los_icu_train %>% ggplot(aes(y = log_icu_los_day, x = service_unit)) +
         geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
         theme_classic()
 ```
@@ -1482,7 +1499,7 @@ and not that there are actual different ICUs in the hospital.
 
 Fit another model:
 ```{r}
-mlreg_los_icu_2 <- lm(log_icu_los_day ~ ., data = data_los_icu[, names(data_los_icu) != "icu_exp_flg"])
+mlreg_los_icu_2 <- lm(log_icu_los_day ~ ., data = data_los_icu_train[, names(data_los_icu_train) != "icu_exp_flg"])
 summary(mlreg_los_icu_2)
 ```
 The adj R2 decreased quite a bit compared to the last model (probably mostly due to the 
@@ -1510,25 +1527,29 @@ Lets see if LOS is really shorter for people that died in ICU then for people th
 
 Summary of log LOS for people that died:
 ```{r}
-data_los_icu %>% filter(icu_exp_flg == 1) %>% select(log_icu_los_day) %>% summary()
+data_los_icu_train %>% filter(icu_exp_flg == 1) %>% 
+        select(log_icu_los_day) %>% 
+        summary()
 ```
 Summary of log LOS for people that survived:
 ```{r}
-data_los_icu %>% filter(icu_exp_flg == 0) %>% select(log_icu_los_day) %>% summary()
+data_los_icu_train %>% filter(icu_exp_flg == 0) %>% 
+        select(log_icu_los_day) %>% 
+        summary()
 ```
 
-Actually the mean is higher for people that died. So maybe that's not really a problem.
+Actually the mean is higher for people that died. So maybe that's not that big a problem.
 
 Exclude the `icu_exp_flg` variable from the data:
 ```{r}
-data_los_icu <- data_los_icu %>% select(!icu_exp_flg)
+data_los_icu_train <- data_los_icu_train %>% select(!icu_exp_flg)
 ```
 
-We will now try to manually slect the variables to include.
+We will now try to manually select the variables to include.
 
 Create a plot that shows all the numeric variables plotted against the outcome:
 ```{r}
-data_los_icu %>% select_if(is.numeric) %>%
+data_los_icu_train %>% select_if(is.numeric) %>%
         pivot_longer(cols =  colnames(.[,-21])) %>% 
         ggplot(aes(y = log_icu_los_day, x = value)) +
         facet_wrap(~ name, scales = 'free_x') +
@@ -1541,7 +1562,7 @@ There are some variables that are skewed. This is not good, since for a linear
 model they should be approximately normally distributed. I will try and see if
 logarithmizing them helps:
 ```{r}
-data_los_icu %>% select(bun_first, creatinine_first, spo2_1st, wbc_first, weight_first, pco2_first, log_icu_los_day) %>%
+data_los_icu_train %>% select(bun_first, creatinine_first, spo2_1st, wbc_first, weight_first, pco2_first, log_icu_los_day) %>%
         pivot_longer(cols =  colnames(.[,-7])) %>% 
         ggplot(aes( x = log(value))) +
         facet_wrap(~ name, scales = "free") +
@@ -1553,7 +1574,7 @@ transform it into a factor variable (e.g. normal [95-99], low normal [89-95], lo
 
 Lets look at the scatterplot with the logarithmized variables:
 ```{r}
-data_los_icu %>% select(bun_first, creatinine_first, spo2_1st, wbc_first, weight_first, pco2_first, log_icu_los_day) %>%
+data_los_icu_train %>% select(bun_first, creatinine_first, spo2_1st, wbc_first, weight_first, pco2_first, log_icu_los_day) %>%
         pivot_longer(cols =  colnames(.[,-7])) %>% 
         ggplot(aes(y = log_icu_los_day, x = log(value))) +
         facet_wrap(~ name, scales = 'free_x') +
@@ -1562,9 +1583,28 @@ data_los_icu %>% select(bun_first, creatinine_first, spo2_1st, wbc_first, weight
         geom_smooth(method = "lm")
 ```
 
+Do we have any zero values in the data?
+```{r}
+data_los_icu_train$bun_first %>% summary()
+data_los_icu_train$creatinine_first %>% summary()
+data_los_icu_train$wbc_first %>% summary()
+data_los_icu_train$weight_first %>% summary()
+data_los_icu_train$pco2_first %>% summary()
+```
+
+Creatinine has at least one zero value:
+```{r}
+data_los_icu_train$creatinine_first %>% sort() %>% head()
+```
+
+I will replace 0 with 0.1
+```{r}
+data_los_icu_train[data_los_icu_train$creatinine_first == 0, "creatinine_first"] <- 0.1
+```
+
 Lets transform these variables:
 ```{r}
-data_los_icu_t <- data_los_icu %>% 
+data_los_icu_train_t <- data_los_icu_train %>% 
         mutate(log_bun_first = log(bun_first), 
                log_creatinine_first = log(creatinine_first),
                log_wbc_first = log(wbc_first), 
@@ -1578,16 +1618,16 @@ data_los_icu_t <- data_los_icu %>%
 
 Lets see if there is a diff in LOS in ICU between the different groups for SPO2:
 ```{r}
-boxplot(data_los_icu_t$log_icu_los_day ~ data_los_icu_t$fact_spo2_1st)
+boxplot(data_los_icu_train_t$log_icu_los_day ~ data_los_icu_train_t$fact_spo2_1st)
 ```
 This looks promising.
 
 Lets look closer at `hour_icu_intime`:
 ```{r}
-data_los_icu_t %>% ggplot(aes(x = hour_icu_intime, y = log_icu_los_day)) +
+data_los_icu_train_t %>% ggplot(aes(x = hour_icu_intime, y = log_icu_los_day)) +
         geom_point() +
         geom_smooth(method = "lm") +
-        geom_smooth(method = "loess") +
+        geom_smooth(method = "loess", color = "red") +
         theme_classic()
         
 ```
@@ -1600,10 +1640,10 @@ Here we dont really see the density very well.
 
 Lets look at a boxplot:
 ```{r}
-boxplot(data_los_icu_t$log_icu_los_day ~ data_los_icu_t$hour_icu_intime)
+boxplot(data_los_icu_train_t$log_icu_los_day ~ data_los_icu_train_t$hour_icu_intime)
 ```
 
-There really doesnt seem to be any pattern here.
+There really doesnt seem to be much of a pattern here.
 
 Lets break the day up into pieces and have a look again.
 
@@ -1611,7 +1651,7 @@ It would be possible, that people that arrive during the night are worse off, as
 could not wait until the next day to get o the ICU:
 
 ```{r}
-data_los_icu_t %>% select(log_icu_los_day, hour_icu_intime) %>% 
+data_los_icu_train_t %>% select(log_icu_los_day, hour_icu_intime) %>% 
         mutate(fact_hour_icu_intime = as.factor(case_when(hour_icu_intime <= 6 ~ "night",
                                          hour_icu_intime > 6 &  hour_icu_intime <= 12 ~ "morning",
                                          hour_icu_intime > 12 &  hour_icu_intime <= 20 ~ "afternoon",
@@ -1628,21 +1668,21 @@ above we see that for 7-9 the mean of the log LOS is lower. However for
 
 We can check if our reasoning would be consistent with the clinical scores.
 ```{r}
-boxplot(data_los_icu_t$sofa_first ~ data_los_icu_t$hour_icu_intime)
+boxplot(data_los_icu_train_t$sofa_first ~ data_los_icu_train_t$hour_icu_intime)
 ```
 
 ```{r}
-boxplot(data_los_icu_t$sapsi_first ~ data_los_icu_t$hour_icu_intime)
+boxplot(data_los_icu_train_t$sapsi_first ~ data_los_icu_train_t$hour_icu_intime)
 ```
 
 It looks like the scores are generally lower for the patients that arrive in the morning.
 (a bit clearer for the sofa score). However this means we should check if the apparent
-relationship might just be due to the differnt clinical scores. In that case the
+relationship might just be due to the different clinical scores. In that case the
 hour of arrival at the ICU would not add anything to a predictive model.
 
 Lets fit a linear model:
 ```{r}
-data_los_icu_t %>% mutate(fact_hour_icu_intime = 
+data_los_icu_train_t %>% mutate(fact_hour_icu_intime = 
                                   as.factor(case_when(hour_icu_intime > 12 | hour_icu_intime < 6 ~ "rest of day",
                                   hour_icu_intime >= 6 &  hour_icu_intime <= 12 ~ "morning"))) %>% 
         lm(log_icu_los_day ~ fact_hour_icu_intime + sofa_first + sapsi_first, data = .) %>% 
@@ -1652,7 +1692,7 @@ When adjusted for the two clinical scores, patients that arrive at ICU show no
 significantly different log of LOS in ICU then patients that arrive during the rest of the day.
 
 ```{r}
-data_los_icu_t %>% mutate(day_in_h = case_when(day_icu_intime == "Monday" ~ 0*24,
+data_los_icu_train_t %>% mutate(day_in_h = case_when(day_icu_intime == "Monday" ~ 0*24,
                                                   day_icu_intime == "Tuesday" ~ 1*24,
                                                   day_icu_intime == "Wednesday" ~ 2*24,
                                                   day_icu_intime == "Thursday" ~ 3*24,
@@ -1670,7 +1710,7 @@ There is an odd pattern visible, of bent stripes going from top left to bottom r
 
 Lets look at it with the outcome not logarithmized:
 ```{r}
-data_los_icu_t %>% mutate(day_in_h = case_when(day_icu_intime == "Monday" ~ 0*24,
+data_los_icu_train_t %>% mutate(day_in_h = case_when(day_icu_intime == "Monday" ~ 0*24,
                                                   day_icu_intime == "Tuesday" ~ 1*24,
                                                   day_icu_intime == "Wednesday" ~ 2*24,
                                                   day_icu_intime == "Thursday" ~ 3*24,
@@ -1695,19 +1735,66 @@ This could serve to explain some of the variation in the outcome.
 The model should then only predict the patient to leave at certain times, 
 which would be based on the time the patient was admitted.
 
-It looks like they are transferred at around 20 h (or at least that is how it
+It looks like they leave the ICU at around 20 h (or at least that is how it
 is recorded, it is also possible, that this is when the bed becomes free again
 for other patients), since this is more or less when patients where admitted
- (here on Monday), that stayed more or less exactly two days.
+(here on Monday), that stayed more or less exactly two days.
  
-However, I dont think this can be implemented within a linear model, but it
-could be added as a rounding step after the model was fit.
+However, this cannot be implemented within a linear model, but it
+could be added as a rounding step after the model fit.
 
 We will leave it in the dataset to do this, but will not include it in the model.
 
+If this was a real life problem, we would try to find out what causes this pattern
+and also see if we should rephrase the question => would we only need to predict
+the amount of days (halve days) a person spent in the ICU? Maybe the "higher accuracy"
+of the result is just added noise that doesnt really mean anything and is not at all 
+relevant for the organization.
+
+We could investigate, if we should just round the outcome to halve or whole days, 
+which would probably be what is relevant for the problem. ????????
+
+
+Lets find out what time the results should be rounded to:
+```{r}
+data_los_icu_train_t %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                los_icu_hour = icu_los_day*24,
+                                hour_icu_discharge = (hour_icu_intime + (los_icu_hour %% 24)) %% 24) %>% 
+        select(icu_los_day, hour_icu_intime, los_icu_hour, hour_icu_discharge) %>% 
+        ggplot(aes(x = hour_icu_discharge)) +
+        geom_density() +
+        geom_rug() +
+        theme_classic()
+
+```
+The highest density is around 20:00, but there are also many that are during the night,
+which is unexpected.
+
+Lets display it with 24 in the middle (instead of it being the break)
+```{r}
+data_los_icu_train_t %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                los_icu_hour = icu_los_day*24,
+                                hour_icu_discharge = (hour_icu_intime + (los_icu_hour %% 24)) %% 24,
+                                hour_icu_discharge_night = ifelse(hour_icu_discharge > 12, hour_icu_discharge, hour_icu_discharge + 24)) %>%
+        ggplot(aes(x = hour_icu_discharge_night)) +
+        geom_density() +
+        geom_rug() +
+        theme_classic() +
+        scale_x_continuous(breaks = c(12,14,16,18,20,22,24,26,28,30))
+```
+
+```{r}
+data_los_icu_train_t %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                los_icu_hour = icu_los_day*24,
+                                hour_icu_discharge = (hour_icu_intime + (los_icu_hour %% 24)) %% 24,
+                                hour_icu_discharge_night = ifelse(hour_icu_discharge > 12, hour_icu_discharge, hour_icu_discharge + 24)) %>%
+        .[, "hour_icu_discharge_night"] %>% summary()
+```
+The best guess seems to be to round to at around 22 h as release time.
+
 Lets take a look at the day of arrival:
 ```{r}
-boxplot(data_los_icu_t$log_icu_los_day ~ data_los_icu_t$day_icu_intime)
+boxplot(data_los_icu_train_t$log_icu_los_day ~ data_los_icu_train_t$day_icu_intime)
 ```
 It looks like the log LOS is generally higher for patients that arrive Friday til Sunday.
 
@@ -1715,21 +1802,30 @@ This could be similar to how we argued for the hour of admission.
 The cases on Friday through Sunday could be more severe. Lets look at boxplots
 for the clinical scores:
 ```{r}
-boxplot(data_los_icu_t$sapsi_first ~ data_los_icu_t$day_icu_intime)
+boxplot(data_los_icu_train_t$sapsi_first ~ data_los_icu_train_t$day_icu_intime)
 ```
-The mean of the SAPS I score is a bit lower on mondays.
+There isnt really a clear pattern here.
 
 ```{r}
-boxplot(data_los_icu_t$sofa_first ~ data_los_icu_t$day_icu_intime)
+boxplot(data_los_icu_train_t$sofa_first ~ data_los_icu_train_t$day_icu_intime)
 ```
 The mean of the SOFA score is a bit lower on Saturday and Sundays.
 
 So this would speak against confounding by the clinical scores.
 So what is the reason?? Weekend = Alcohol = Accidents etc??
 
+Is it due to there being more accidents that are treated surgically, which means they
+stay generally longer in the ICU?
+```{r}
+data_los_icu_train_t %>% ggplot(aes(x = day_icu_intime, fill = service_unit)) +
+        geom_bar(position = "fill") +
+        theme_classic()
+```
+Maybe a bit, but its not very clear.
+
 Lets look at boxplots of weekend (incl Friday) vs not weekend:
 ```{r}
-data_los_icu_t %>% mutate(we = as.factor(case_when(
+data_los_icu_train_t %>% mutate(we = as.factor(case_when(
         day_icu_intime %in% c("Monday", "Tuesday", "Wednesday", "Thursday") ~ "not weekend",
         day_icu_intime %in% c("Friday", "Saturday", "Sunday") ~ "weekend"))) %>% 
         ggplot(aes(x = we, y = age)) +
@@ -1737,22 +1833,198 @@ data_los_icu_t %>% mutate(we = as.factor(case_when(
         theme_classic()
 ```
 
-
-Lets create again a correlation matrix:
+Lets fit a model:
 ```{r}
-cormatr <- data %>% filter(complete.cases(data) == TRUE) %>% 
-        mutate(service_unit = as.numeric(service_unit),
-               day_icu_intime = as.numeric(day_icu_intime)) %>% 
-        as.matrix() %>% 
-        rcorr()
+data_los_icu_train_t %>% mutate(we = as.factor(case_when(
+        day_icu_intime %in% c("Monday", "Tuesday", "Wednesday", "Thursday") ~ "not weekend",
+        day_icu_intime %in% c("Friday", "Saturday", "Sunday") ~ "weekend"))) %>% 
+        lm(log_icu_los_day ~ we + service_unit + sofa_first + sapsi_first, data = .) %>% 
+        summary()
+```
 
-ggcorrplot(cormatr$r, p.mat = cormatr$P, hc.order = TRUE, type = "upper")
+The created weekend variable doesnt seem to contain any information.
+
+Lets drop it from the dataframe:
+```{r}
+data_los_icu_train_t <- data_los_icu_train_t %>% select(!day_icu_intime)
+```
+
+Lets look at our factor variables:
+```{r}
+data_los_icu_train_t %>% select_if(sapply(., is.factor) == TRUE | colnames(.) == "log_icu_los_day") %>%
+        droplevels() %>% 
+        pivot_longer(cols =  colnames(.[,-12])) %>% 
+        ggplot(aes(y = log_icu_los_day, x = value)) +
+        facet_wrap(~ name, scales = 'free_x') +
+        geom_boxplot() +
+        theme_classic()
+```
+For the "diagnosis flags", there is mostly a tendency towards longer LOS if the diagnosis
+is present. Except in Coronary Artery Disease this doesnt seem to be the case (in the 
+unadjusted comparison here). For gender there also doesnt seem to be much of a 
+difference between the groups.
+
+Lets fit a small model including gender and what seem to be the best predictors:
+```{r}
+lm(log_icu_los_day ~ gender_num + age + sofa_first + sapsi_first, data = data_los_icu_train_t) %>% 
+        summary()
+```
+Here gender does not seem to influence LOS.
+
+```{r}
+data_los_icu_train_t %>% colnames()
+```
+
+Lets fit a model with all the resting variables:
+```{r}
+#there was an Inf value in log_creatinine_first due to the log transformation: replace it
+data_los_icu_train_t[is.finite(data_los_icu_train_t$log_creatinine_first) == FALSE, "log_creatinine_first"] <- log(0.1)
+
+mlreg_los_icu_3 <- lm(log_icu_los_day ~ ., data = data_los_icu_train_t[,-c(2,6)])
+summary(mlreg_los_icu_3)
+```
+The adj R2 is a little bit better then with the last model.
+
+Lets try to implement the rounding to get a release time at 22 h in the evening
+for the predictions. Calculate rounded values and RMSE for rounded and not rounded predictions:
+```{r}
+data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>% 
+        bind_cols(.,prediction_days = mlreg_los_icu_3$fitted.values) %>% 
+        mutate(prediction_hours = prediction_days*24,
+               predicted_discharge_time = (hour_icu_intime+prediction_hours)%%24,
+               to_round = ifelse(predicted_discharge_time < 10, -(predicted_discharge_time + 2), 22-predicted_discharge_time),
+               pred_rounded_hours = prediction_hours + to_round,
+               pred_rounded_days = pred_rounded_hours/24,
+               truth = exp(log_icu_los_day),
+               res2_round = (truth - pred_rounded_days)^2,
+               res2_not_rounded = (truth - prediction_days)^2) %>% 
+        summarise(RMSE_rounded = sqrt(mean(res2_round)),
+                  RMSE_not_rounded = sqrt(mean(res2_not_rounded)))
+
+```
+From this it looks like the rounding doesnt help. The result is even a bit worse.
+
+Lets look at the predicted times of discharge:
+```{r}
+data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>% 
+        bind_cols(.,prediction_days = mlreg_los_icu_3$fitted.values) %>% 
+        mutate(prediction_hours = prediction_days*24,
+               predicted_discharge_time = (hour_icu_intime+prediction_hours)%%24,
+               to_round = ifelse(predicted_discharge_time < 10, -(predicted_discharge_time + 2), 22-predicted_discharge_time),
+               pred_rounded_hours = prediction_hours + to_round,
+               predicted_discharge_time_rounded = (hour_icu_intime + pred_rounded_hours)%%24) %>% 
+        select(predicted_discharge_time, predicted_discharge_time_rounded) %>% 
+        ggplot(aes(x = predicted_discharge_time)) +
+        geom_density() +
+        geom_rug() +
+        theme_classic() +
+        geom_rug(aes(x = predicted_discharge_time_rounded), color = "red")
+```
+As expected the distribution seems to be random. The rounded predictions, all predict
+a discharge at 22 h (here in red)
+
+Lets try to "smothen" our rounding, by only changing the the prediction by the sqrt of
+the difference with 22 h.
+```{r}
+data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>% 
+        bind_cols(.,prediction_days = mlreg_los_icu_3$fitted.values) %>% 
+        mutate(prediction_hours = prediction_days*24,
+               predicted_discharge_time = (hour_icu_intime+prediction_hours)%%24,
+               to_round = ifelse(predicted_discharge_time < 10, -(predicted_discharge_time + 2), 22-predicted_discharge_time),
+               rounding_sign = ifelse(to_round > 0, +1, -1),
+               to_round_sqrt = sqrt(abs(to_round))*rounding_sign,
+               pred_rounded_hours = prediction_hours + to_round_sqrt,
+               predicted_discharge_time_rounded = (hour_icu_intime + pred_rounded_hours)%%24) %>% 
+        select(predicted_discharge_time, predicted_discharge_time_rounded) %>% 
+        ggplot() +
+        geom_density(aes(x = predicted_discharge_time)) +
+        geom_density(aes(x = predicted_discharge_time_rounded), color = "red") +
+        geom_rug(aes(x = predicted_discharge_time)) +
+        geom_rug(aes(x = predicted_discharge_time_rounded), color = "red")
+        theme_classic()
+```
+Now the distribution looks more like the one of the truth.
+
+Lets see if the RMSE improved:
+```{r}
+data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>% 
+        bind_cols(.,prediction_days = mlreg_los_icu_3$fitted.values) %>% 
+        mutate(prediction_hours = prediction_days*24,
+               predicted_discharge_time = (hour_icu_intime+prediction_hours)%%24,
+               to_round = ifelse(predicted_discharge_time < 10, -(predicted_discharge_time + 2), 22-predicted_discharge_time),
+               rounding_sign = ifelse(to_round > 0, +1, -1),
+               to_round_sqrt = sqrt(abs(to_round))*rounding_sign,
+               pred_rounded_hours = prediction_hours + to_round_sqrt,
+               pred_rounded_days = pred_rounded_hours/24,
+               truth = exp(log_icu_los_day),
+               res2_round = (truth - pred_rounded_days)^2,
+               res2_not_rounded = (truth - prediction_days)^2) %>% 
+        summarise(RMSE_rounded = sqrt(mean(res2_round)),
+                  RMSE_not_rounded = sqrt(mean(res2_not_rounded))) 
+```
+The RMSE of the rounded prediction is a bit better before, but not better then
+the unrounded predictions.
+
+I think this might be due to the fact, that it is more or less random if the prediction is rounded
+into the right direction, meaning if we make the error smaller or bigger. Here
+the two seem to balance each other and lead to similar accuracy as the original prediction.
+
+I will not continue this effort here. We would have to have some indication in which direction
+the prediction should be adapted, otherwise it doesnt add anything to the mode, except
+for more realistic predicted discharge times (which isnt relevant here).
+
+We will use lasso to find the best model:
+```{r}
+set.seed(1)
+
+tuneGrid <- expand.grid(
+  .fraction = seq(0, 1, by = 0.1)
+)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+mlasso <- train(
+  log_icu_los_day ~ .,
+  data = data_los_icu_train_t[,-c(2,6)],
+  method = 'lasso',
+  preProcess = c("center", "scale"),
+  trControl = ctrl,
+  tuneGrid = tuneGrid
+)
+
+mlasso
 ```
 
 
-If we look again at the correlation matrix we had previously 
-```{r fig.height=10}
-ggcorrplot(cormatr$r, p.mat = cormatr$P, hc.order = TRUE, type = "upper")
+
+```{r}
+plot(mlasso)
+```
+
+```{r}
+plot(varImp(mlasso))
+```
+
+```{r}
+drop <-predict.enet(mlasso$finalModel, type='coefficients', s=mlasso$bestTune$fraction, mode='fraction')$coefficients  
+drop[drop==0]%>%names()
+
+```
+
+
+```{r}
+data_los_icu_train_droped <- data_los_icu_train_t %>% select(!c(renal_flg, copd_flg, map_1st, sodium_first, potassium_first, tco2_first, log_bun_first, fact_spo2_1st, gender_num, hour_icu_intime))
+
+mlreg_los_icu_4 <- lm(log_icu_los_day ~ ., data = data_los_icu_train_droped)
+summary(mlreg_los_icu_4)
+```
+
+
+```{r}
+data_los_icu_train_t %>% colnames()
 ```
 
 
