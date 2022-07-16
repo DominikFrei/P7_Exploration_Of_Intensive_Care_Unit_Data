@@ -34,7 +34,6 @@ library(mice) #imputation
 library(Hmisc) #rcorr()
 library(ggcorrplot) #ggcorrplot()
 library(car) #vif()
-library(caret)
 library(elasticnet)
 ```
 Language:
@@ -1401,7 +1400,7 @@ data_los_icu <- data_imp %>% select(!c(hospital_los_after_icu,
                                    day_28_flg))
 ```
 
-Since our goal is prediction we will do a three way split, train:test:validation (6:2:2)
+Since our goal is prediction we will do a three way split, train:test (6:4)
 ```{r}
 #set seed
 set.seed(1)
@@ -1412,15 +1411,7 @@ train <- createDataPartition(data_los_icu$icu_los_day, p = 0.6, list = FALSE)
 #create training set
 data_los_icu_train <- data_los_icu[train,]
 
-data_los_icu_rest <- data_los_icu[-train,]
-
-#partition for testing set
-test <- createDataPartition(data_los_icu_rest$icu_los_day, p = 0.5, list = FALSE)
-
-#create testing set
-data_los_icu_test <- data_los_icu_rest[test,]
-#create validation set
-data_los_icu_val <- data_los_icu_rest[-test,]
+data_los_icu_test <- data_los_icu[-train,]
 ```
 
 We will continue to explore the data just with the training set.
@@ -2021,64 +2012,209 @@ data_los_icu_train_droped <- data_los_icu_train_t %>% select(!c(renal_flg, copd_
 mlreg_los_icu_4 <- lm(log_icu_los_day ~ ., data = data_los_icu_train_droped)
 summary(mlreg_los_icu_4)
 ```
+This result is not great with an adj R squared of 0.21.
 
+## Check Model assumptions
 
+- Linearity
+
+Lets look at the added variable plots for this model in order to assess the
+relationships of the predictors with the outcome, adjusted for the other predictors:
 ```{r}
-data_los_icu_train_t %>% colnames()
+avPlots(mlreg_los_icu_4)
+```
+Many of these displayed relationshipd dont seem to be represented very well by a linear model.
+For many there is just a cloud of points and a line fit more or less horizontally.
+This means there is a lot of variability in the data, that is not explained by the variables
+in the model. This is also in line with the poor model fit (adjusted R2).
+
+- Normality
+
+Lets look at the distributions of the numeric variables in our model:
+```{r}
+data_los_icu_train_droped %>% select_if(is.numeric) %>%         
+        pivot_longer(cols =  colnames(.[,])) %>% 
+        ggplot(aes( x = log(value))) +
+        facet_wrap(~ name, scales = "free") +
+        geom_density() +
+        theme_classic()
+```
+Most of these look ok. Age should probably also have been logarithmized.
+
+- Homoscedasticity
+
+Lets look at a plot of the fitted values vs. Residuals:
+```{r}
+plot(mlreg_los_icu_4, which = 1)
+```
+The points look to be randomly distributed around the fit.
+This looks to be fulfilled.
+
+## Prediction
+
+Lets use this model to make predictions about the test set and compare them to the true values.
+
+We have to apply the same transformations as with the training data:
+```{r}
+#select the variables
+data_los_icu_test_prep <- data_los_icu_test %>% 
+                        select(!c(aline_flg,
+                                icu_exp_flg,
+                                abg_count,
+                                iv_day_1,
+                                gender_num, 
+                                hour_icu_intime, 
+                                day_icu_intime, 
+                                renal_flg, 
+                                copd_flg, 
+                                map_1st, 
+                                sodium_first, 
+                                potassium_first, 
+                                tco2_first, 
+                                bun_first, 
+                                spo2_1st))
+
+#make log transformations
+data_los_icu_test_prep <- data_los_icu_test_prep %>% 
+        mutate(log_creatinine_first = log(creatinine_first),
+               log_wbc_first = log(wbc_first), 
+               log_weight_first = log(weight_first), 
+               log_pco2_first = log(pco2_first),
+               log_icu_los_day = log(icu_los_day)) %>% 
+        select(!c(creatinine_first,
+               wbc_first,
+               weight_first,
+               pco2_first,
+               icu_los_day))
 ```
 
-
+Make predictions:
 ```{r}
-control <- rfeControl(functions=rfFuncs, method="cv", number=10)
-# run the RFE algorithm
-results <- rfe(data_los_icu[, names(data_los_icu) != "log_icu_los_day"], 
-               data_los_icu$log_icu_los_day, 
-               sizes=c(1:33), 
-               rfeControl=control)
-# summarize the results
-print(results)
-# list the chosen features
-predictors(results)
-# plot the results
-plot(results, type=c("g", "o"))
+bind_cols(data_los_icu_test_prep, 
+          prediction = predict.lm(mlreg_los_icu_4,
+                                  data_los_icu_test_prep[,-22])) %>% 
+        mutate(res_2 = (prediction - log_icu_los_day)^2) %>% 
+        summarise(RMSE_log = sqrt(mean(res_2)),
+                  RMSE = exp(sqrt(mean(res_2))))
 ```
 
+The RMSE of the log(outcome) is quite close to the one we got from the
+training data. So over fitting is not a problem here.
+The RMSE is around two days. Since most of the patients stay less then 4 days,
+this is quite a poor performance.
 
-
-
-We will now use the best subset method to find the best combination of variables to fit our Model. For this we will use the olsrr::ols_step_best_subset function:
 ```{r}
-bestsub <- ols_step_best_subset(mlreg_los_icu_2)
-#select and print relevant information from output
-cbind(n_variables = bestsub[, "n"], 
-      var_included = bestsub[, "predictors"], 
-      adj_R2 = round(bestsub[, "adjr"], digits = 3),
-      AIC = round(bestsub[, "aic"], digits = 3)) %>% 
-        kable()
+data_los_icu_test %>% ggplot(aes(x = icu_los_day)) +
+        geom_density() +
+        theme_classic() +
+        scale_x_continuous(breaks = seq(0, 28, 2))
 ```
 
-We will select the model that yields the highest adj R2
-
-
-
-
-### Poisson Model
-
-Undo the logarithmizing of `icu_los_day`:
+Lets look at the RMSE for different bins of the fitted values e.g. how good is prediction
+for patients that stayed one day vs. 2 vs. 3 etc:
 ```{r}
-data_los_icu_po <- data_los_icu %>% 
+bind_cols(data_los_icu_test_prep, 
+          prediction = predict.lm(mlreg_los_icu_4,
+                                  data_los_icu_test_prep[,-22])) %>% 
+        mutate(res_2 = (prediction - log_icu_los_day)^2,
+               bin_outcome = cut2(exp(log_icu_los_day), seq(0,27,1))) %>% 
+        group_by(bin_outcome) %>% 
+        summarise(RMSE_log = sqrt(mean(res_2)),
+                  RMSE = exp(sqrt(mean(res_2)))) %>% 
+        ggplot(aes(x = bin_outcome, y = RMSE)) +
+        geom_bar(stat = "identity") +
+        scale_y_continuous(breaks = seq(1,11,1)) +
+        theme_classic()
+```
+We never get lower then 1 day. Mostly the error is around 1/2 of the LOS
+of the patient.
+
+## Random Forest
+
+Lets see if we get a better result with a Random Forest using the same variables:
+```{r}
+set.seed(1)
+
+tuneGrid <- expand.grid(
+  mtry = c(2:4)
+)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+mrf <- train(
+  log_icu_los_day ~ .,
+  data = data_los_icu_train_droped,
+  method = 'rf',
+  preProcess = c("center", "scale"),
+  trControl = ctrl,
+  tuneGrid = tuneGrid
+)
+
+mrf
+```
+
+Lets look at the importance of the different variables in the RF model:
+```{r}
+plot(varImp(mrf))
+```
+The most important ones are similar to the lasso model above, with some differences in
+ordering. There are also differences in the distribution of the magnitudes of the 
+importance assigned to the variables. In the lasso model there were a few very 
+important variables and then many way less important one. Here the differences 
+are not that large.
+
+Lets run the same model but with all the variables and without any being logarithmized:
+```{r}
+data_los_icu_train_rf2 <- data_los_icu_train %>% 
         mutate(icu_los_day = exp(log_icu_los_day)) %>% 
         select(!log_icu_los_day)
 ```
 
 
 ```{r}
-pmod <- glm(icu_los_day ~ .,
-             data = data_los_icu_po[, names(data_los_icu) != "icu_exp_flg"], 
-             family = poisson(link = "log"))
-summary(pmod)
+set.seed(1)
+
+tuneGrid <- expand.grid(
+  mtry = c(2:4)
+)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+mrf2 <- train(
+  icu_los_day ~ .,
+  data = data_los_icu_train_rf2,
+  method = 'rf',
+  preProcess = c("center", "scale"),
+  trControl = ctrl,
+  tuneGrid = tuneGrid
+)
+
+mrf2
 ```
 
+## Predictions
+
+
+# Discussion
+
+I think th epoor model performance is probably due to the available data not beeing
+relevant enough to predict the outcome variable. There seems to be a lot of unexplained variance
+in the outcome. The data that was used was collected from a database but with another
+research question (Inference to find the importance of factors that influence mortality
+within 28 days after ICU admission, specifically to assess if the application of IAC
+has an effect on this).
+The variables where probably chosen on the basis of previous knowledge about what
+influences mortality (not LOS in ICU).
+
+To predict LOS in ICU is probably also quite a hard problem. Although there are 
+sources that indicate, this can be done more successfully ().
+Maybe LOS in hospital would have been a more reasonable choice.
 
 
 
