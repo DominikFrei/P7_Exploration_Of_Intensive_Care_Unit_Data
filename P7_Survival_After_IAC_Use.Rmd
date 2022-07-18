@@ -1,19 +1,30 @@
 ---
-title: "P7_Survival_After_Indwelling_Arterial_Catheters_Use"
+title: "P7_Exploring_Intensive_Care_Unit_Data"
 author: "Dominik Frei"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_float: TRUE
+    number_sections: true
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=5, fig.fullwidth=TRUE)
 ```
 
-## Abstract
+# Abstract
 
-We run inference models for: 
-- death vs censoring (logistic regression) / or death in hospital?
-- for the group that died, day of death (linear regression)
+Data from the admission to an ICU was analysed. The data was initially collected from
+a database (MIMIC-II) "to investigate the effectiveness of indwelling arterial catheters in hemodynamically stable patients with respiratory failure for mortality outcomes".  
+First the missing values where analysed and it was investigated if they are missing
+in any particular pattern. Then an exploratory data analysis was done. Pairwise
+correlations between the variables where investigated and discussed.
+
+Then the missing values where imputed using MICE.
+
+A logistic regression model with the purpose of inference was fit. The included variables where found using
+stepwise backward selection.
 
 ## Resources
 
@@ -70,8 +81,8 @@ data$sepsis_flg <- as.factor(data$sepsis_flg)
 
 data[,c("gender_num", "sepsis_flg")] %>% str()
 ```
-`sepsis_flg` will not be useful in our analysis, since all the values are the same
-(it has zero variance). We can therefore drop it from our data:
+`sepsis_flg` only has one level / all the values are the same
+(it has zero variance). We will therefore drop it from our data:
 ```{r}
 data <- data %>% select(!sepsis_flg)
 ```
@@ -194,7 +205,7 @@ mis_cor_results %>% arrange(p_val) %>% filter(p_val < 0.05) %>% kable()
 ```
 There arent any strong correlations.
 
-The reason why exactly these values are missing remains unclear.
+The reason why exactly these values are missing remains unclear. They seem to be missing randomly.
 
 Is there any correlation between `weight_first` and `bmi`?
 ```{r}
@@ -208,7 +219,7 @@ cor.test(data$bmi, data$weight_first)
 ```
 There is significant correlation between `weight_first` and `bmi` (which is not
 surprising, since bmi is calculated using weight and height). The remaining variation
-in the `bmi` is due to variances in height of the people. Unfortunately we dont know height.
+in the `bmi` is due to variances in height of the people. Unfortunately we dont have any information about patient height.
 Since the two variables have a strong correlation, it probably makes sense to just drop `bmi`.
 Since we probably would have to choose between the two anyway if we want to fit a linear model.
 
@@ -292,8 +303,10 @@ rcorr(as.matrix(data_death))
 
 `aline_flg` correlates significantly with `hosp_exp_flg` and `icu_exp_flg` and close
 to significantly with `day_28_flg`. The correlation coefficients however are quite small
-for all of them. This indicates that either the use of an AIC increases the risk for
-death or patients with a higher risk of death are more likely to receive monitoring via IAC.
+for all of them. This could indicate that the use of an AIC could increase the risk for
+death or patients with a higher risk of death could be more likely to receive monitoring via IAC.
+It is also possible that there is no causal relationship between the two. My guess is that
+people that are worse off will more likely receive an AIC.
 
 Lets look at contingency tables between `day_28_flg` and `hosp_exp_flg` / `icu_exp_flg`?
 Can `hosp_exp_flg` / `icu_exp_flg` only be positive if `day_28_flg` is positive?
@@ -361,7 +374,9 @@ Lets look at all the variables that contain physiological measurements or simila
 #subset
 data_meas <- data %>% select(ends_with("_1st") | ends_with("_first"))
 
-#scale
+#scale (I did this to get them all on the same scale, for the plot. This could have
+# been solved differently, by freeing the x-axis for the different plot,
+# e.g. allowing different limits of the x-axis for different plots.)
 data_meas <- data_meas %>% sapply(., scale) %>% data.frame()
 
 #pivot longer and create indicators for outliers
@@ -370,8 +385,8 @@ data_meas <- data_meas %>% pivot_longer(cols = colnames(.)) %>%
         mutate(outlier = as.factor(ifelse((value>3*IQR(value, na.rm = TRUE) | value <(-3*IQR(value, na.rm = TRUE))), 1, 0)))
 ```
 
-Produce density plots to present the distribution of the data (outliers (>3*IQR) are marked
-by red ticks)
+Produce density plots to present the distribution of the data. Outliers (>3*IQR) are marked
+by red ticks.
 ```{r fig.height=5}
 data_meas %>% filter(name %in% unique(.$name)[1:6]) %>% 
         ggplot(aes(x = value)) +
@@ -456,7 +471,7 @@ as they are the most extreme:
 ```{r}
 data$wbc_first %>% sort(decreasing = TRUE) %>% head(n = 3)
 ```
-Norm values are from 4.5 - 11.0 K/uL. So these values are clearly quite out of the normal range.
+Norm values are from 4.5 - 11.0 K/uL. So these values are clearly quite a lot out of the normal range.
 This can be indicative of infections or malignancies.
 
 We will not look more closely at the other values.
@@ -469,7 +484,7 @@ data_meas %>% filter(name %in% unique(.$name)[13:18]) %>%
         geom_rug(data = ~ filter(.x, outlier == 1), col = "red") +
         theme_bw()
 ```
-The distribution for `po2_first` is not very symetric.
+The distribution for `po2_first` is not very symmetric.
 
 - `po2_first`: Partial Pressure of Oxygen in blood (mmHg, numeric): high values dont
 have a specific medical implication. They could also be explained by ventilation 
@@ -766,7 +781,7 @@ data %>% ggplot(aes(x = hour_icu_intime, fill = service_unit, alpha = 0.2))+
 This pattern is more or less the same over the week. On Saturday morning there
 seems to be an increase (in SICU and MICU), maybe due to alcohol related accidents 
 / poisoning.  
-Generally it look like in the first half of the day SICU receives most of its patients,
+Generally it looks like in the first half of the day SICU receives most of its patients,
 while in the second half MICU receives most of its patients.
 
 Lets look at the clinical scores used to predict mortality:  
@@ -813,7 +828,7 @@ distributions for both groups are quite right skewed.
 ### Correlations
 
 Lets look at pairwise correlations between all the variables:
-```{r}
+```{r fig.height=8, fig.width=8}
 cormatr <- data %>% filter(complete.cases(data) == TRUE) %>% 
         mutate(service_unit = as.numeric(service_unit),
                day_icu_intime = as.numeric(day_icu_intime)) %>% 
@@ -884,15 +899,17 @@ died in the hospital and possibly within 28 days after icu admission.
 
 ## Imputation
 
+We assume that the missing values are missing in a random manner and imputation
+will therefore not introduce any bias.
+
 As discussed the `bmi` variable will not be imputed and now dropped from the dataset,
 since it is correlated quite strongly with `weight_first`. It would also probably not
 be of use for imputation of `weight_first`, since in most cases the `bmi` is also NA,
 where `weight_first` is NA.
+We will also exclude `renal_flg` due to its low variance:
 ```{r}
 data <- data %>% select(!bmi)
 ```
-
-
 For the other missing values we will use Multivariate Imputation by Chained Equations (mice).
 We will use all the data (except the 2 variables we have already dropped) for the
 imputation:
@@ -925,7 +942,7 @@ Get the imputed data:
 data_imp <- complete(imp)
 ```
 
-## Model 1: death within 28 days as outcome variable
+## Model 1: Which variables are associated to death within 28 days
 
 We will fit a logistic regression model with `day_28_flg` as outcome, with the goal to identify
 which of the variables are correlated with death within 28 days after icu admission.
@@ -948,12 +965,15 @@ data_28d <- data_imp %>% select(!c(hospital_los_after_icu,
 By excluding these variables, we also get rid of most of the variables, that showed
 strong correlations with other independent variables.
 
+We will also exclude `renal_flg`, due to its low variance:
+```{r}
+data_28d <- data_28d %>% select(!renal_flg)
+```
+
+### Exploratory Modeling
+
 We will now fit a first model and then investigate the variance inflation factors
 to assess multicolinearity and decide if any further variables should be excluded from the model.
-
-For example we we could consider to only include one clinical score (SOFA I or SAPSI)
-
-## Exploratory Modeling
 
 I realized that we probably should not fit a model with `hour_icu_intime` as integer,
 since we would not expect a linear relationship with death over time, but there might be
@@ -980,7 +1000,8 @@ data_28d %>% ggplot(aes(x = hour_icu_intime, fill = day_28_flg)) +
         geom_bar(position="fill") +
         theme_classic()
 ```
-There doesnt look to be any real tendency here.
+There doesnt look to be any real trend here (e.g. that mortality is 
+increased for patients that arrive around a certain time).
 We will drop this variable from the model.
 
 Lets repeat the same plot with `day_icu_intime`:
@@ -1036,7 +1057,7 @@ This reduced the vif value for `chloride_first`.
 summary(mlreg_3)
 ```
 
-We will now write a backwards selection function, which in every step removes the variable
+We will now write a stepwise backwards selection function, which in every step removes the variable
 with the highest p-value, until all p-values are below 0.05 (excluding the intercept,
 since we cannot remove that).
 
@@ -1091,7 +1112,7 @@ back_sel <- back_sel_logreg(dataset = data_28d)
 The function returns a list containing the smallest model and a dataframe that documents
 the process of removing variables:
 ```{r}
-back_sel[[1]]
+back_sel[[1]] %>% tibble()
 ```
 
 Lets make some plots with this.
@@ -1119,13 +1140,13 @@ In this plot we can see the order in which the variables where removed and "how
 close" they where to give a significant contribution to the respective models.
 The cut off of p = 0.05 is marked in red.
 The most relevant part here is probably, the few most right data points. We see that
-in the next to last model, the coefficient for `renal_flg` was close to differ 
+in the next to last model, the coefficient for `wbc_first` was close to differ 
 significantly from zero. The next variable that would be removed would be 
 `chloride_first`.
 
 Display the AIC and Residual deviances in the respective models:
 ```{r}
-back_sel_logreg_stats[1:17,] %>% ggplot(aes(x = iteration)) +
+back_sel_logreg_stats %>% ggplot(aes(x = iteration)) +
         geom_line(aes(y = AIC, color = "red")) +
         geom_line(aes(y = res_dev, color = "blue")) +
         theme_classic() +
@@ -1137,11 +1158,11 @@ back_sel_logreg_stats[1:17,] %>% ggplot(aes(x = iteration)) +
 ```
 We can see that over the course of removing the "non significant" variables, 
 the Residual Deviance increased monotonically, while the AIC got smaller and then
-increased a bit when `renal_flg` was removed.
+increased a bit when `wbc_first` was removed.
 
 We would expect the residual deviance to rise and the AIC to get lower, when removing
 the non significant variables from the model. That the AIC rises a little bit, when we
-remove `renal_flg` could be an indication, that it might be relevant to the outcome
+remove `wbc_first` could be an indication, that it might be relevant to the outcome
 and might also have been found to be significant with more data.
 
 Lets look at the model, that only contains variables that contribute significantly to
@@ -1149,16 +1170,19 @@ the model:
 ```{r}
 summary(back_sel[[2]])
 ```
+
+### Discussion
+
 We see that the Intercept is not significant. This is not a problem, since it makes
 a prediction for patients, that are zero years old, where measured to have a body
 temperature of zero F etc. so it doesnt have a practical meaning here.
 
-We will now go trhough the included variables and discuss them:
+We will now go through the included variables and discuss them:
 
-"General" patient attributes:
-- Age
-- Gender
-- Weight
+"General" patient attributes:  
+- Age  
+- Gender  
+- Weight  
 
 Higher age is quite a well known risk factor. So is male gender, with males
 having generally a lower life expectancy.
@@ -1167,11 +1191,11 @@ What surprised me is the that the coefficient of weight is negative, meaning low
 weight increases the risk for death within 28 days. I would have expected the opposite,
 since overweight is quite well known to produce cardiovascular problems etc. It is
 possible however that because the model also includes the flags for stroke and arterial 
-fibrilation, this is mostly 
+fibrilation, this is 
 adjusted for, and a higher weight means more "reserves" for recovery.
 
 I would suspect that the BMI, we had previously dropped from the data, since there 
-where too many missing values would be a better predictor, since it is probably 
+where too many missing values would generally be a better predictor, since it is probably 
 more medically relevant, as the height differences between patients are adjusted for.
 
 We will fit two models for these variables with `day_28_flg` as outcome.
@@ -1227,40 +1251,38 @@ variable is not significant. I suspect, that this is due to the weight variable
 acting also as a proxy for gender here, so since it also contains some information
 about gender, the addition of the gender variable doesnt add anything.
 
-Clinical Scores:
-- SOFA score
-- SAPS I score
+Clinical Scores:  
+- SOFA score  
+- SAPS I score  
 
 These we would also expect to be included in the model, since they where developed to
 assess the risk for mortality in the ICU (SOFA) and to assess the general physiological
 state of patients (SAPS I).
 
-Diseases / Events / Diagnoses:
-- Atrial fibrillation
-- Stroke
-- Malignancy
-- Respiratory Disease
+Diseases / Events / Diagnoses:  
+- Atrial fibrillation  
+- Stroke  
+- Malignancy  
+- Respiratory Disease  
 
 It is not quite clear to me why these are included in the model, while others did not
 make it in (such as Congestive heart failure). It is possible that for some the
-lab values give the same information, but preciser, 
-e.g. for renal disease => Creatinine / Blood Urea Nitrogen give information not only
-on the presence of a renal disease, but also its severity.
+lab values give the same information, but preciser.
 
-Lab values:
-- Heart Rate
-- Temperature
-- Hemoglobin
-- Chloride
-- Blood Urea Nitrogen
-- Creatinine
+Lab values:  
+- Heart Rate  
+- Temperature  
+- Hemoglobin  
+- Chloride  
+- Blood Urea Nitrogen  
+- Creatinine  
 
 Heart rate and temperature seem obvious to be important for the acute outcome.
 For the rest I lack the domain knowledge to discuss much about it.
 
-## Check model assumptions
+### Check model assumptions
 
-### Linearity assumption
+#### Linearity assumption
 
 For the numeric variables used in the model we will have to check if there is 
 a linear relationship with the logit of the outcome.
@@ -1281,7 +1303,6 @@ data_28d_linas <- data_28d_linas %>%
   mutate(logit = log(pred_p/(1-pred_p))) %>%
   gather(key = "predictors", value = "predictor.value", -logit)
 ```
-
 
 ```{r}
 data_28d_linas %>% filter(predictors != "pred_p") %>% ggplot(aes(logit, predictor.value))+
@@ -1332,16 +1353,17 @@ summary(mlreg_nlexcl2)
 This seems to be the case, as in this model their coefficients are significantly different
 from zero again (or close to it for `chloride_first`).
 
-Should we drop them or leave them in the model????
+Although some of the relationships a re quite noisy, I think it is still reasonable,
+to assume a linear relationship, since there is doesnt seem to be an obvious different pattern here.
 
-### Influential values
+#### Influential values
 
 ```{r}
 plot(back_sel[[2]], which = 4, id.n = 3)
 ```
-Looks ok.
+Looks ok. None of the values are too high.
 
-### Multicollinearity
+#### Multicollinearity
 
 We had alreads looked at this before we fit this model. Lets look at it again
 with only the included variables:
@@ -1350,13 +1372,13 @@ vif(back_sel[[2]]) %>% sort()
 ```
 This is fulfilled as none of the values are over 5.
 
+#### Sample Size
 
-
-
+There should be at least 10 cases with the least frequent outcome.
 ```{r}
-back_sel[[2]] %>% summary()
+data_28d$day_28_flg %>% table()
 ```
-
+This is full filled here.
 
 ## Model 2: Predict the length of stay in the ICU
 
@@ -1364,8 +1386,10 @@ We will fit a linear regression model with `icu_los_day` as outcome, with the go
 to predict the length of stay in ICU after admission. We could imagine a scenario,
 where we could use this information in order to better plan our resources, e.g. if
 we dont have enough beds according to our prediction, we could start organizing
-more beds ahead of time. This would make it irrelevant if a patient dies or
+more beds ahead of time. For this purpose it would be irrelevant if a patient dies or
 survives.
+
+### Exploratory Modeling
 
 Lets have a closer look at the time of death and LOS (length of stay) in the ICU:
 ```{r}
@@ -1373,9 +1397,9 @@ data_imp %>% filter(icu_exp_flg == 1) %>%
         select(icu_los_day, mort_day_censored) %>% 
         mutate(time_mort_to_los = icu_los_day - mort_day_censored) %>% head()
 ```
+We see that the length of stay is always a bit higher then the time until death.
 We had already discussed this point above. I assume, the LOS in the ICU was captured such that
 it represents, when the bed could be used again for the next patient or when the body was removed from it, since it is always a bit higher then the time of death in patients that died.
-This would justify using this variable like this.
 
 Lets plot the density curve of the difference between the time of death and LOS:
 ```{r}
@@ -1400,7 +1424,7 @@ data_los_icu <- data_imp %>% select(!c(hospital_los_after_icu,
                                    day_28_flg))
 ```
 
-Since our goal is prediction we will do a three way split, train:test (6:4)
+Since our goal is prediction we will split the data into a training and testing set (6:4)
 ```{r}
 #set seed
 set.seed(1)
@@ -1428,8 +1452,7 @@ data_los_icu_train %>% ggplot(aes(x = icu_los_day)) +
         theme_classic()
 ```
 The outcome is not normally distributed. This is a problem if we want to use linear regression.
-Lets try to transform it in order to solve this. Alternatively we could use a Poisson model,
-since we can formulate the problem as how many patients are released from ICU within X days.
+Lets try to transform it in order to solve this.
 
 Show distribution of Log transformed `icu_los_day`:
 ```{r}
@@ -1451,9 +1474,6 @@ Fit a model including all of the available variables:
 mlreg_los_icu <- lm(log_icu_los_day ~ ., data = data_los_icu_train[, names(data_los_icu_train) != "icu_exp_flg"])
 summary(mlreg_los_icu)
 ```
-
-The model is not that good in predicting the los (adj R2 = 0.4764).
-
 The variables that show a coefficient, which significantly differs from zero are among others
 the variables that describe measures taken in the ICU: `aline_flg`, `iv_day_1`, `abg_count`
 I will exclude those here, since they are not available from the beginning or shortly after the
@@ -1468,20 +1488,21 @@ Exclude these columns:
 data_los_icu_train <- data_los_icu_train %>% select(!c(aline_flg, iv_day_1, abg_count))
 ```
 
-We should investigate of what importance the service unit is. Does it
+We should decide how to treat the `service_unit` variable. Does it
 just describe how the patient is treated or are there really two different stations
-in the hospital, for patients treated surgically or by internal medicine.
+in the hospital, for patients treated surgically or by internal medicine?
 
 How many patients where in which service unit?
 ```{r}
 data_los_icu_train$service_unit %>% table()
 ```
-Show a violin plot of the log lenght of stay in ICU for each of the two service units:
+Show a violin plot of the log length of stay in ICU for each of the two service units:
 ```{r fig.width=5}
 data_los_icu_train %>% ggplot(aes(y = log_icu_los_day, x = service_unit)) +
         geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
         theme_classic()
 ```
+  
 The horizontal lines represent the quartiles. We see that patients treated surgically
 (SICU) stay generally a bit longer.
 
@@ -1494,24 +1515,27 @@ mlreg_los_icu_2 <- lm(log_icu_los_day ~ ., data = data_los_icu_train[, names(dat
 summary(mlreg_los_icu_2)
 ```
 The adj R2 decreased quite a bit compared to the last model (probably mostly due to the 
-removal of `abg_count`, as this was somewhat of a proxy for LOS, as awe have seen during the exploratory
-data analysis).
+removal of `abg_count`, as this was somewhat of a proxy for LOS, as we have seen during the exploratory
+data analysis.
 
-The variables that show a coefficient, which significantly differs from zero are among others:
-- the service unit (which is in line with the plot we made above) 
-- the clinical scores. Their coefficient is positive, meaning a higher score (patient is worse
-of leads to predicting a longer stay).
+The variables that show a coefficient, which significantly differs from zero are among others:  
+- the service unit (which is in line with the plot we made above)   
+- the clinical scores. Their coefficient is positive, meaning a higher score (if the patient is worse
+off, this leads to predicting a longer stay).  
 - several diagnostic flags: some with positive coefficients (respiratory disease, stroke, 
 congestive heart failure) and some with negative coefficients (Coronary artery disease, 
 malignancy). So either the problems of people with malignancy and coronary artery disease can be
-resolved quickly or they die quickly.
+resolved quickly or they die quickly.  
 
 I think there could be a problem with using a linear model for this task. The 
 included variables give some kind of information about the health of the 
 patient.The outcome however is probably not linearly related to the the health of the person,
-but I would assume in some kind of upside down U-shape, such that a very bad condition 
-leads to death and therefore a short stay, not good, but not terrible condition leads to
-longer stay and good condition again leads to shorter stay. So one variable can 
+but I would assume in some kind of upside down U-shape, such that:  
+- a very bad condition 
+leads quickly to death and therefore a short stay   
+- not good, but not terrible condition leads to
+longer stay  
+- good condition again leads to shorter stay. So one independent variable could 
 so to speak either be used to predict death or health for the surviving patients, but not both.
 
 Lets see if LOS is really shorter for people that died in ICU then for people that didnt.
@@ -1530,13 +1554,14 @@ data_los_icu_train %>% filter(icu_exp_flg == 0) %>%
 ```
 
 Actually the mean is higher for people that died. So maybe that's not that big a problem.
+We will continue with the linear model.
 
 Exclude the `icu_exp_flg` variable from the data:
 ```{r}
 data_los_icu_train <- data_los_icu_train %>% select(!icu_exp_flg)
 ```
 
-We will now try to manually select the variables to include.
+We will now try to manually select the variables to include / exclude as well as possible.
 
 Create a plot that shows all the numeric variables plotted against the outcome:
 ```{r}
@@ -1607,7 +1632,7 @@ data_los_icu_train_t <- data_los_icu_train %>%
         select(!c(bun_first, creatinine_first, spo2_1st, wbc_first, weight_first, pco2_first))
 ```
 
-Lets see if there is a diff in LOS in ICU between the different groups for SPO2:
+Lets see if there is a difference in LOS in ICU between the different groups for SPO2:
 ```{r}
 boxplot(data_los_icu_train_t$log_icu_los_day ~ data_los_icu_train_t$fact_spo2_1st)
 ```
@@ -1682,6 +1707,7 @@ data_los_icu_train_t %>% mutate(fact_hour_icu_intime =
 When adjusted for the two clinical scores, patients that arrive at ICU show no
 significantly different log of LOS in ICU then patients that arrive during the rest of the day.
 
+Lets plot the log LOS over the the whole week:
 ```{r}
 data_los_icu_train_t %>% mutate(day_in_h = case_when(day_icu_intime == "Monday" ~ 0*24,
                                                   day_icu_intime == "Tuesday" ~ 1*24,
@@ -1738,15 +1764,11 @@ We will leave it in the dataset to do this, but will not include it in the model
 
 If this was a real life problem, we would try to find out what causes this pattern
 and also see if we should rephrase the question => would we only need to predict
-the amount of days (halve days) a person spent in the ICU? Maybe the "higher accuracy"
+the amount of days (or halve days) a person spent in the ICU? Maybe the "higher accuracy"
 of the result is just added noise that doesnt really mean anything and is not at all 
 relevant for the organization.
 
-We could investigate, if we should just round the outcome to halve or whole days, 
-which would probably be what is relevant for the problem. ????????
-
-
-Lets find out what time the results should be rounded to:
+Lets find out what time the results would have to be rounded to:
 ```{r}
 data_los_icu_train_t %>% mutate(icu_los_day = exp(log_icu_los_day),
                                 los_icu_hour = icu_los_day*24,
@@ -1803,7 +1825,7 @@ boxplot(data_los_icu_train_t$sofa_first ~ data_los_icu_train_t$day_icu_intime)
 The mean of the SOFA score is a bit lower on Saturday and Sundays.
 
 So this would speak against confounding by the clinical scores.
-So what is the reason?? Weekend = Alcohol = Accidents etc??
+So what is the reason? Weekend = Alcohol = Accidents etc??
 
 Is it due to there being more accidents that are treated surgically, which means they
 stay generally longer in the ICU?
@@ -1833,7 +1855,7 @@ data_los_icu_train_t %>% mutate(we = as.factor(case_when(
         summary()
 ```
 
-The created weekend variable doesnt seem to contain any information.
+The created weekend variable doesnt seem to add anything to the model.
 
 Lets drop it from the dataframe:
 ```{r}
@@ -1862,10 +1884,6 @@ lm(log_icu_los_day ~ gender_num + age + sofa_first + sapsi_first, data = data_lo
 ```
 Here gender does not seem to influence LOS.
 
-```{r}
-data_los_icu_train_t %>% colnames()
-```
-
 Lets fit a model with all the resting variables:
 ```{r}
 #there was an Inf value in log_creatinine_first due to the log transformation: replace it
@@ -1887,8 +1905,8 @@ data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>%
                pred_rounded_hours = prediction_hours + to_round,
                pred_rounded_days = pred_rounded_hours/24,
                truth = exp(log_icu_los_day),
-               res2_round = (truth - pred_rounded_days)^2,
-               res2_not_rounded = (truth - prediction_days)^2) %>% 
+               res2_round = (pred_rounded_days - truth)^2,
+               res2_not_rounded = (prediction_days  - truth)^2) %>% 
         summarise(RMSE_rounded = sqrt(mean(res2_round)),
                   RMSE_not_rounded = sqrt(mean(res2_not_rounded)))
 
@@ -1931,7 +1949,7 @@ data_los_icu_train_t %>% select(hour_icu_intime, log_icu_los_day) %>%
         geom_density(aes(x = predicted_discharge_time)) +
         geom_density(aes(x = predicted_discharge_time_rounded), color = "red") +
         geom_rug(aes(x = predicted_discharge_time)) +
-        geom_rug(aes(x = predicted_discharge_time_rounded), color = "red")
+        geom_rug(aes(x = predicted_discharge_time_rounded), color = "red") +
         theme_classic()
 ```
 Now the distribution looks more like the one of the truth.
@@ -1961,10 +1979,18 @@ into the right direction, meaning if we make the error smaller or bigger. Here
 the two seem to balance each other and lead to similar accuracy as the original prediction.
 
 I will not continue this effort here. We would have to have some indication in which direction
-the prediction should be adapted, otherwise it doesnt add anything to the mode, except
+the prediction should be adapted, otherwise it doesnt add anything usefull to the model, except
 for more realistic predicted discharge times (which isnt relevant here).
 
-We will use lasso to find the best model:
+### Lasso
+
+We will now use a lasso model for further variable selection.
+This model is able to shrink the weight
+of a variable in the model up until it becomes zero and the variable is therefore
+dropped from the model. This can be used to select only the relevant predictors for our
+linear model. 
+We will run the model over
+10 different values of the tuning parameter (fraction) using 10 times cross validation:
 ```{r}
 set.seed(1)
 
@@ -1989,59 +2015,68 @@ mlasso <- train(
 mlasso
 ```
 
-
-
+Show the performance of the modle over different values of the tuning parameter (fraction):
 ```{r}
 plot(mlasso)
 ```
+We see that RMSE is the smalles with fraction = 0.7.
 
+Plot the importance of the different variables in this model:
 ```{r}
 plot(varImp(mlasso))
 ```
+At the top we see the clinical scores and age, which seems not unexpected from looking
+at scatter plots with the outcome. After those there is a pretty steep drop
+of in the assigned importance.
 
+Lets see which variables where dropped from the lasso model:
 ```{r}
 drop <-predict.enet(mlasso$finalModel, type='coefficients', s=mlasso$bestTune$fraction, mode='fraction')$coefficients  
 drop[drop==0]%>%names()
-
 ```
 
+### Final Model
 
+Lets a fit a linear model without these variables:
 ```{r}
 data_los_icu_train_droped <- data_los_icu_train_t %>% select(!c(renal_flg, copd_flg, map_1st, sodium_first, potassium_first, tco2_first, log_bun_first, fact_spo2_1st, gender_num, hour_icu_intime))
 
 mlreg_los_icu_4 <- lm(log_icu_los_day ~ ., data = data_los_icu_train_droped)
 summary(mlreg_los_icu_4)
 ```
-This result is not great with an adj R squared of 0.21.
+This result is not great with an adj R squared of 0.21. However the R2 and
+RMSE are a bit better then the result of the best lasso model from the cross validations.
+This is probably due to the fact, that here the score does not stem from new
+samples as in the cross validations.
 
-## Check Model assumptions
+### Check Model assumptions
 
-- Linearity
+#### Linearity
 
 Lets look at the added variable plots for this model in order to assess the
 relationships of the predictors with the outcome, adjusted for the other predictors:
 ```{r}
 avPlots(mlreg_los_icu_4)
 ```
-Many of these displayed relationshipd dont seem to be represented very well by a linear model.
+Many of these displayed relationships dont seem to be represented very well by a linear model.
 For many there is just a cloud of points and a line fit more or less horizontally.
 This means there is a lot of variability in the data, that is not explained by the variables
-in the model. This is also in line with the poor model fit (adjusted R2).
+in the model. This is also in line with the low adjusted R2.
 
-- Normality
+#### Normality
 
 Lets look at the distributions of the numeric variables in our model:
 ```{r}
 data_los_icu_train_droped %>% select_if(is.numeric) %>%         
         pivot_longer(cols =  colnames(.[,])) %>% 
-        ggplot(aes( x = log(value))) +
+        ggplot(aes(x = value)) +
         facet_wrap(~ name, scales = "free") +
         geom_density() +
         theme_classic()
 ```
-Most of these look ok. Age should probably also have been logarithmized.
+Most of these look ok. `po2_first` should probably also have been logarithmized.
 
-- Homoscedasticity
+#### Homoscedasticity
 
 Lets look at a plot of the fitted values vs. Residuals:
 ```{r}
@@ -2050,7 +2085,7 @@ plot(mlreg_los_icu_4, which = 1)
 The points look to be randomly distributed around the fit.
 This looks to be fulfilled.
 
-## Prediction
+### Prediction
 
 Lets use this model to make predictions about the test set and compare them to the true values.
 
@@ -2126,12 +2161,54 @@ bind_cols(data_los_icu_test_prep,
         scale_y_continuous(breaks = seq(1,11,1)) +
         theme_classic()
 ```
-We never get lower then 1 day. Mostly the error is around 1/2 of the LOS
-of the patient.
+We never get lower then 1 day. Mostly the RMSE is around 1/3 of the outcome.
+For the patients that stayed less then one day the RMSE is almost 3, which is quite
+bad.
 
-## Random Forest
+In order to have something to compare the performance of the model to, we can 
+calculate the RMSE for the simplest model, which is just to predict the mean
+LOS for every patient.
 
-Lets see if we get a better result with a Random Forest using the same variables:
+The mean is:
+```{r}
+data_los_icu_test_prep %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                  mean_icu_los_day = mean(icu_los_day),
+                                  res_2 = (mean_icu_los_day - log_icu_los_day)^2) %>% 
+        .[1, "mean_icu_los_day"]
+```
+
+The RMSE is:
+```{r}
+data_los_icu_test_prep %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                  mean_icu_los_day = mean(icu_los_day),
+                                  res_2 = (mean_icu_los_day - log_icu_los_day)^2) %>%
+        summarise(RMSE = sqrt(mean(res_2)))
+        
+```
+This is a bit worse then the linear model we have found. So our model would help
+to reduce the error around half a day compared to this "null-model".
+
+Lets show the RMSE over the different LOS of the patients:
+```{r}
+data_los_icu_test_prep %>% mutate(icu_los_day = exp(log_icu_los_day),
+                                  mean_icu_los_day = mean(icu_los_day),
+                                  res_2 = (mean_icu_los_day - icu_los_day)^2,
+                                  bin_outcome = cut2(icu_los_day, seq(0,27,1))) %>% 
+        group_by(bin_outcome) %>% 
+        summarise(RMSE = sqrt(mean(res_2))) %>% 
+        ggplot(aes(x = bin_outcome, y = RMSE)) +
+        geom_bar(stat = "identity") +
+        scale_y_continuous(breaks = seq(1,11,1)) +
+        theme_classic()
+```
+This is about what we would expect.
+
+### Random Forest
+
+Lets see if we get a better result with a Random Forest using the same variables
+as selected via the lasso model.
+We will fit the model over three values of mtry and
+use 10 fold cross validation:
 ```{r}
 set.seed(1)
 
@@ -2155,6 +2232,8 @@ mrf <- train(
 
 mrf
 ```
+The Rsquared of the best model (mtry = 4) here is worse then for the linear model 
+and so is the RMSE.
 
 Lets look at the importance of the different variables in the RF model:
 ```{r}
@@ -2166,14 +2245,15 @@ importance assigned to the variables. In the lasso model there were a few very
 important variables and then many way less important one. Here the differences 
 are not that large.
 
-Lets run the same model but with all the variables and without any being logarithmized:
+Lets run the same model but with all the variables and without any being logarithmized.
+Create dataframe:
 ```{r}
 data_los_icu_train_rf2 <- data_los_icu_train %>% 
         mutate(icu_los_day = exp(log_icu_los_day)) %>% 
         select(!log_icu_los_day)
 ```
 
-
+Run model:
 ```{r}
 set.seed(1)
 
@@ -2197,24 +2277,56 @@ mrf2 <- train(
 
 mrf2
 ```
+The performance of this model is worse then with the one only using the variables
+selected by the lasso model.
 
-## Predictions
+### Predictions
 
+We will now use the first random forrest model, to make predictions for the test data:
+```{r}
+bind_cols(data_los_icu_test_prep, 
+          prediction = predict(mrf,
+                               data_los_icu_test_prep[,-22])) %>% 
+        mutate(res_2 = (prediction - log_icu_los_day)^2) %>% 
+        summarise(RMSE_log = sqrt(mean(res_2)),
+                  RMSE = exp(sqrt(mean(res_2))))
+```
+The results are comparable to the ones for the linear model.
 
-# Discussion
+Lets show here also a plot that shows the RMSE over the different actual values of LOS:
+```{r}
+bind_cols(data_los_icu_test_prep, 
+          prediction = predict(mrf,
+                               data_los_icu_test_prep[,-22])) %>% 
+        mutate(res_2 = (prediction - log_icu_los_day)^2,
+               bin_outcome = cut2(exp(log_icu_los_day), seq(0,27,1))) %>% 
+        group_by(bin_outcome) %>% 
+        summarise(RMSE_log = sqrt(mean(res_2)),
+                  RMSE = exp(sqrt(mean(res_2)))) %>% 
+        ggplot(aes(x = bin_outcome, y = RMSE)) +
+        geom_bar(stat = "identity") +
+        scale_y_continuous(breaks = seq(1,11,1)) +
+        theme_classic()
+```
+This looks also quite similar to the result from the linear model.
 
-I think th epoor model performance is probably due to the available data not beeing
-relevant enough to predict the outcome variable. There seems to be a lot of unexplained variance
-in the outcome. The data that was used was collected from a database but with another
+### Discussion
+
+I think the poor model performance is probably due to the available data not being
+relevant / complete enough to predict the outcome variable. 
+The data that was used was collected from a database but with another
 research question (Inference to find the importance of factors that influence mortality
 within 28 days after ICU admission, specifically to assess if the application of IAC
 has an effect on this).
 The variables where probably chosen on the basis of previous knowledge about what
 influences mortality (not LOS in ICU).
 
-To predict LOS in ICU is probably also quite a hard problem. Although there are 
-sources that indicate, this can be done more successfully ().
-Maybe LOS in hospital would have been a more reasonable choice.
+To predict LOS in ICU is probably also quite a hard problem.
+Maybe LOS in hospital would have been a more reasonable choice with the available data.
+
+We saw that the performance of the random forrest model was at best comparable to the
+one of the linear model. In this case the linear model is to be preferred, as it offers
+better interpretability.
 
 
 
