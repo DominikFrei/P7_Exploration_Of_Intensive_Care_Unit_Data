@@ -40,4 +40,8 @@ the models was assessed, by making predictions for the testing data and comparin
 
 Data Source: https://physionet.org/content/mimic2-iaccd/1.0/
 
+## Links
+To view all the code directly in your browser use the link below:
+https://rpubs.com/DominikFrei/P7_Exploration_Of_Intensive_Care_Unit_Patient_Data
+
 
