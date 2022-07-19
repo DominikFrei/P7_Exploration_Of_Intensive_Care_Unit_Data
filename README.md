@@ -1,4 +1,4 @@
-# Exploration Of Intensive Care Unit Data
+# Exploration Of Intensive Care Unit Patient Data
 
 ## Abstract
 
