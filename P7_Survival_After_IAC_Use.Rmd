@@ -1,5 +1,5 @@
 ---
-title: "P7_Exploring_Intensive_Care_Unit_Data"
+title: "P7_Exploration_Of_Intensive_Care_Unit_Data"
 author: "Dominik Frei"
 date: "`r Sys.Date()`"
 output:
@@ -13,23 +13,47 @@ output:
 knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.height=5, fig.fullwidth=TRUE)
 ```
 
-# Abstract
+# Introduction
 
-Data from the admission to an ICU was analysed. The data was initially collected from
-a database (MIMIC-II) "to investigate the effectiveness of indwelling arterial catheters in hemodynamically stable patients with respiratory failure for mortality outcomes".  
+## Abstract
+
+Data concerning patients admitted to an ICU (Intensive Care Unit) was analysed. It contained among others
+information about physiological measurements, diagnosis and outcome.
+The data was initially collected from
+a database (MIMIC-II) "to investigate the effectiveness of indwelling arterial catheters in hemodynamically stable patients with respiratory failure for mortality outcomes".
+
 First the missing values where analysed and it was investigated if they are missing
-in any particular pattern. Then an exploratory data analysis was done. Pairwise
+in any particular pattern. Exploratory data analysis was done. Pairwise
 correlations between the variables where investigated and discussed.
+The missing values where imputed using MICE (Multivariate Imputation by Chained Equations).
 
-Then the missing values where imputed using MICE.
+In order to investigate which of the variables in the dataset where associated with 
+death within 28 days after admission, a logistic regression model was fit.
+Step wise backward selection was used to exclude the variables, for which the fit coefficient
+in the model did not significantly (alpha = 0.05) differ from zero.
 
-A logistic regression model with the purpose of inference was fit. The included variables where found using
-stepwise backward selection.
+To predict the length of stay in the ICU a linear regression and a random forest model where
+fit. The data was split into a training and testing set. To find the respective variables to include, 
+a lasso model was used on the training data. The accuracy of
+the models was assessed, by making predictions for the testing data and comparing them to the true values.
+
+## What I learned
+
+- Using GitHub with R
+- Examine missing values
+- Exploratory data analysis using tidyverse
+- Imputation of missing values using MICE
+- Basic predictive modeling using caret
+- Using lasso and random forest models
+
+## Duration
+
+- R: 45 h
+- Other (writing etc.): 4 h
 
 ## Resources
 
 Data Source: https://physionet.org/content/mimic2-iaccd/1.0/
-
 
 # Code
 
@@ -95,6 +119,8 @@ Lets look at the missing value sof the data:
 ```{r missmap all}
 missmap(data[,colSums(is.na(data)) > 0], main = "Missingness Map: All Patients")
 ```
+We will try to assess, if the values are missing in a certain pattern or at random.
+
 The `bmi` variable contains around 400 NA values, which have adjacent indexes.
 This is somewhat odd. It does not seem that the data was ordered for missing values
 in `bmi`, since there are other NAs, outside of the missing chunk.
@@ -119,7 +145,8 @@ data %>% ggplot(aes(x = as.numeric(rownames(.)))) +
 Here we see that the missing chunk for the is at the end of the data frame.
 It starts at the row number 1387.
 
-Does this coincide with any patterns in other variables?
+Does this coincide with any patterns in other variables? If yes, this could introduce
+bias in possible further analyses.
 
 Lets calculate means for all the numeric variables, for the part of the data, where
 the `bmi` values are missing and the rest and then compare them:
